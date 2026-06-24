@@ -566,8 +566,12 @@ export function Dashboard({ data }: { data: DashboardData }) {
       const selectedState = hasSharedState(sharedState) ? sharedState : localState;
       if (cancelled) return;
 
-      const selectedGames = selectedState[gamesStorageKey] ?? data.games;
-      const selectedNiches = selectedState[nichesStorageKey] ?? data.niches;
+      const localGames = localState[gamesStorageKey] ?? data.games;
+      const localNiches = localState[nichesStorageKey] ?? data.niches;
+      const sharedGames = sharedState[gamesStorageKey];
+      const sharedNiches = sharedState[nichesStorageKey];
+      const selectedGames = Array.isArray(sharedGames) && sharedGames.length > 0 ? sharedGames : localGames;
+      const selectedNiches = Array.isArray(sharedNiches) && sharedNiches.length > 0 ? sharedNiches : localNiches;
       const selectedAlerts = normalizeAlerts(selectedState[alertsStorageKey] ?? []);
       setGames(selectedGames.map(normalizeGame));
       setNiches(selectedNiches.map(normalizeNiche));
@@ -586,8 +590,13 @@ export function Dashboard({ data }: { data: DashboardData }) {
           ...localState,
           [alertsStorageKey]: selectedAlerts
         });
+      } else if ((sharedGames?.length ?? 0) === 0 && selectedGames.length > 0) {
+        void writeRemoteState({
+          [gamesStorageKey]: selectedGames,
+          [nichesStorageKey]: selectedNiches
+        });
       }
-      writeLocalState(selectedState);
+      writeLocalState({ ...selectedState, [gamesStorageKey]: selectedGames, [nichesStorageKey]: selectedNiches });
     }
 
     void loadState();
