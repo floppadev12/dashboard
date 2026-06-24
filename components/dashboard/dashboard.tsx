@@ -82,6 +82,18 @@ type FiredRevenueAlerts = Record<string, boolean>;
 type FiredCcuRecordDates = Record<string, boolean>;
 type ClosedMonths = Record<string, boolean>;
 type RenderAlert = AlertItem | DashboardData["alerts"][number];
+type PersistedState = {
+  [gamesStorageKey]?: Array<Partial<GameCard> & { onlineCount?: string }>;
+  [nichesStorageKey]?: Niche[];
+  [revenueSnapshotsStorageKey]?: RevenueSnapshots;
+  [ccuSnapshotsStorageKey]?: CcuSnapshot[];
+  [alertsStorageKey]?: Array<Partial<AlertItem> & { time?: string }>;
+  [firedMilestonesStorageKey]?: FiredMilestones;
+  [firedRevenueAlertsStorageKey]?: FiredRevenueAlerts;
+  [ccuRecordStorageKey]?: number;
+  [firedCcuRecordDatesStorageKey]?: FiredCcuRecordDates;
+  [closedMonthsStorageKey]?: ClosedMonths;
+};
 const milestones = [
   { value: 1000, label: "1K", medal: "bronze", icon: "/medals/bronze.png" },
   { value: 5000, label: "5K", medal: "silver", icon: "/medals/silver.png" },
@@ -121,6 +133,62 @@ function normalizeNiche(niche: Niche): Niche {
     iconImage: niche.iconImage,
     id: niche.id ?? niche.label.toLowerCase().replace(/[^a-z0-9]+/g, "-")
   };
+}
+
+function readStoredJson<T>(key: string, fallback: T): T {
+  try {
+    const value = window.localStorage.getItem(key);
+    return value ? JSON.parse(value) as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeLocalState(state: Partial<PersistedState>) {
+  Object.entries(state).forEach(([key, value]) => {
+    window.localStorage.setItem(key, JSON.stringify(value));
+  });
+}
+
+async function writeRemoteState(state: Partial<PersistedState>) {
+  try {
+    await fetch("/api/state", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state)
+    });
+  } catch {
+    // Keep local fallback available if the database is temporarily unreachable.
+  }
+}
+
+function normalizeAlerts(alerts: Array<Partial<AlertItem> & { time?: string }> = []) {
+  return alerts
+    .map((alert) => ({
+      id: alert.id ?? crypto.randomUUID(),
+      title: alert.title ?? "Alert",
+      body: alert.body ?? "",
+      createdAt: Number.isFinite(alert.createdAt) ? Number(alert.createdAt) : Date.now(),
+      time: alert.time,
+      severity: alert.severity ?? "Medium",
+      medal: alert.medal
+    }) as AlertItem)
+    .filter((alert) => alert.title !== "ðŸŽ‰ First Revenue CCU!" && alert.medal !== undefined);
+}
+
+function hasSharedState(state: PersistedState) {
+  return [
+    gamesStorageKey,
+    nichesStorageKey,
+    revenueSnapshotsStorageKey,
+    ccuSnapshotsStorageKey,
+    alertsStorageKey,
+    firedMilestonesStorageKey,
+    firedRevenueAlertsStorageKey,
+    ccuRecordStorageKey,
+    firedCcuRecordDatesStorageKey,
+    closedMonthsStorageKey
+  ].some((key) => key in state);
 }
 
 function formatNumber(value: number) {
@@ -442,6 +510,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [activeView, setActiveView] = useState<ActiveView>("Overview");
   const [seenAlertCount, setSeenAlertCount] = useState(0);
   const [closedMonths, setClosedMonths] = useState<ClosedMonths>({});
+  const [stateLoaded, setStateLoaded] = useState(false);
   const notificationRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLDivElement | null>(null);
   useOutsideClick(notificationRef, notificationsOpen, () => setNotificationsOpen(false));
@@ -470,60 +539,80 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const ccuChartData = useMemo(() => buildCcuChartData(ccuSnapshots, totalCcu, playerRange), [ccuSnapshots, totalCcu, playerRange]);
 
   useEffect(() => {
-    const storedGames = window.localStorage.getItem(gamesStorageKey);
-    if (!storedGames) {
-      setGames(data.games.map(normalizeGame));
-      return;
+    let cancelled = false;
+
+    const localState: PersistedState = {
+      [gamesStorageKey]: readStoredJson(gamesStorageKey, data.games),
+      [nichesStorageKey]: readStoredJson(nichesStorageKey, data.niches),
+      [revenueSnapshotsStorageKey]: readStoredJson(revenueSnapshotsStorageKey, {}),
+      [ccuSnapshotsStorageKey]: readStoredJson(ccuSnapshotsStorageKey, []),
+      [alertsStorageKey]: readStoredJson(alertsStorageKey, []),
+      [firedMilestonesStorageKey]: readStoredJson(firedMilestonesStorageKey, {}),
+      [firedRevenueAlertsStorageKey]: readStoredJson(firedRevenueAlertsStorageKey, {}),
+      [ccuRecordStorageKey]: Number(window.localStorage.getItem(ccuRecordStorageKey) ?? "0"),
+      [firedCcuRecordDatesStorageKey]: readStoredJson(firedCcuRecordDatesStorageKey, {}),
+      [closedMonthsStorageKey]: readStoredJson(closedMonthsStorageKey, {})
+    };
+
+    async function loadState() {
+      let sharedState: PersistedState = {};
+      try {
+        const response = await fetch("/api/state", { cache: "no-store" });
+        if (response.ok) sharedState = await response.json() as PersistedState;
+      } catch {
+        sharedState = {};
+      }
+
+      const selectedState = hasSharedState(sharedState) ? sharedState : localState;
+      if (cancelled) return;
+
+      const selectedGames = selectedState[gamesStorageKey] ?? data.games;
+      const selectedNiches = selectedState[nichesStorageKey] ?? data.niches;
+      const selectedAlerts = normalizeAlerts(selectedState[alertsStorageKey] ?? []);
+      setGames(selectedGames.map(normalizeGame));
+      setNiches(selectedNiches.map(normalizeNiche));
+      setRevenueSnapshots(selectedState[revenueSnapshotsStorageKey] ?? {});
+      setCcuSnapshots(selectedState[ccuSnapshotsStorageKey] ?? []);
+      setAlerts(selectedAlerts);
+      setFiredMilestones(selectedState[firedMilestonesStorageKey] ?? {});
+      setFiredRevenueAlerts(selectedState[firedRevenueAlertsStorageKey] ?? {});
+      setCcuRecord(Number(selectedState[ccuRecordStorageKey] ?? 0));
+      setFiredCcuRecordDates(selectedState[firedCcuRecordDatesStorageKey] ?? {});
+      setClosedMonths(selectedState[closedMonthsStorageKey] ?? {});
+      setStateLoaded(true);
+
+      if (!hasSharedState(sharedState) && hasSharedState(localState)) {
+        void writeRemoteState({
+          ...localState,
+          [alertsStorageKey]: selectedAlerts
+        });
+      }
+      writeLocalState(selectedState);
     }
 
-    try {
-      setGames((JSON.parse(storedGames) as Array<Partial<GameCard> & { onlineCount?: string }>).map(normalizeGame));
-    } catch {
-      setGames(data.games.map(normalizeGame));
-    }
-  }, [data.games]);
+    void loadState();
+    return () => {
+      cancelled = true;
+    };
+  }, [data.games, data.niches]);
 
   useEffect(() => {
-    const storedNiches = window.localStorage.getItem(nichesStorageKey);
-    if (!storedNiches) {
-      setNiches(data.niches.map(normalizeNiche));
-      return;
-    }
-
-    try {
-      setNiches((JSON.parse(storedNiches) as Niche[]).map(normalizeNiche));
-    } catch {
-      setNiches(data.niches.map(normalizeNiche));
-    }
-  }, [data.niches]);
-
-  useEffect(() => {
-    try {
-      setRevenueSnapshots(JSON.parse(window.localStorage.getItem(revenueSnapshotsStorageKey) ?? "{}") as RevenueSnapshots);
-      setCcuSnapshots(JSON.parse(window.localStorage.getItem(ccuSnapshotsStorageKey) ?? "[]") as CcuSnapshot[]);
-      setClosedMonths(JSON.parse(window.localStorage.getItem(closedMonthsStorageKey) ?? "{}") as ClosedMonths);
-    } catch {
-      setRevenueSnapshots({});
-      setCcuSnapshots([]);
-      setClosedMonths({});
-    }
-  }, []);
-
-  useEffect(() => {
-    if (games.length === 0 || totalCcu <= 0) return;
+    if (!stateLoaded || games.length === 0 || totalCcu <= 0) return;
     const lastSnapshot = ccuSnapshots[ccuSnapshots.length - 1];
     if (lastSnapshot && Date.now() - lastSnapshot.timestamp < 60_000 && lastSnapshot.players === totalCcu) return;
     const cutoff = Date.now() - 14 * 24 * 60 * 60_000;
     const nextSnapshots = [...ccuSnapshots.filter((snapshot) => snapshot.timestamp >= cutoff), { timestamp: Date.now(), players: totalCcu }];
     setCcuSnapshots(nextSnapshots);
-    window.localStorage.setItem(ccuSnapshotsStorageKey, JSON.stringify(nextSnapshots));
-  }, [ccuSnapshots, games.length, totalCcu]);
+    writeLocalState({ [ccuSnapshotsStorageKey]: nextSnapshots });
+    void writeRemoteState({ [ccuSnapshotsStorageKey]: nextSnapshots });
+  }, [ccuSnapshots, games.length, stateLoaded, totalCcu]);
 
   useEffect(() => {
-    if (totalCcu <= 0 || totalCcu <= ccuRecord) return;
+    if (!stateLoaded || totalCcu <= 0 || totalCcu <= ccuRecord) return;
     const todayKey = dateKey(new Date());
     setCcuRecord(totalCcu);
-    window.localStorage.setItem(ccuRecordStorageKey, String(totalCcu));
+    writeLocalState({ [ccuRecordStorageKey]: totalCcu });
+    void writeRemoteState({ [ccuRecordStorageKey]: totalCcu });
 
     if (firedCcuRecordDates[todayKey]) return;
     const nextAlert: AlertItem = {
@@ -538,9 +627,9 @@ export function Dashboard({ data }: { data: DashboardData }) {
     const nextFiredDates = { ...firedCcuRecordDates, [todayKey]: true };
     setAlerts(nextAlerts);
     setFiredCcuRecordDates(nextFiredDates);
-    window.localStorage.setItem(alertsStorageKey, JSON.stringify(nextAlerts));
-    window.localStorage.setItem(firedCcuRecordDatesStorageKey, JSON.stringify(nextFiredDates));
-  }, [alerts, ccuRecord, firedCcuRecordDates, totalCcu]);
+    writeLocalState({ [alertsStorageKey]: nextAlerts, [ccuRecordStorageKey]: totalCcu, [firedCcuRecordDatesStorageKey]: nextFiredDates });
+    void writeRemoteState({ [alertsStorageKey]: nextAlerts, [ccuRecordStorageKey]: totalCcu, [firedCcuRecordDatesStorageKey]: nextFiredDates });
+  }, [alerts, ccuRecord, firedCcuRecordDates, stateLoaded, totalCcu]);
 
   useEffect(() => {
     const interval = window.setInterval(() => setNow(Date.now()), 120_000);
@@ -548,6 +637,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   }, []);
 
   useEffect(() => {
+    return;
     try {
       const storedAlerts = (JSON.parse(window.localStorage.getItem(alertsStorageKey) ?? "[]") as Array<Partial<AlertItem> & { time?: string }>)
         .map((alert) => ({
@@ -576,7 +666,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   }, []);
 
   useEffect(() => {
-    if (games.length === 0) return;
+    if (!stateLoaded || games.length === 0) return;
     const nextAlerts: AlertItem[] = [];
     const nextFired: FiredMilestones = { ...firedMilestones };
 
@@ -602,12 +692,12 @@ export function Dashboard({ data }: { data: DashboardData }) {
     const mergedAlerts = [...nextAlerts, ...alerts].slice(0, 20);
     setAlerts(mergedAlerts);
     setFiredMilestones(nextFired);
-    window.localStorage.setItem(alertsStorageKey, JSON.stringify(mergedAlerts));
-    window.localStorage.setItem(firedMilestonesStorageKey, JSON.stringify(nextFired));
-  }, [games, alerts, firedMilestones]);
+    writeLocalState({ [alertsStorageKey]: mergedAlerts, [firedMilestonesStorageKey]: nextFired });
+    void writeRemoteState({ [alertsStorageKey]: mergedAlerts, [firedMilestonesStorageKey]: nextFired });
+  }, [games, alerts, firedMilestones, stateLoaded]);
 
   useEffect(() => {
-    if (games.length === 0 || !isAfterRevenueCheckpoint(new Date())) return;
+    if (!stateLoaded || games.length === 0 || !isAfterRevenueCheckpoint(new Date())) return;
     const todayKey = dateKey(new Date());
     const existingToday = revenueSnapshots[todayKey] ?? {};
     const nextToday = { ...existingToday };
@@ -623,7 +713,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
     if (!changed) return;
     const nextSnapshots = { ...revenueSnapshots, [todayKey]: nextToday };
     setRevenueSnapshots(nextSnapshots);
-    window.localStorage.setItem(revenueSnapshotsStorageKey, JSON.stringify(nextSnapshots));
+    writeLocalState({ [revenueSnapshotsStorageKey]: nextSnapshots });
+    void writeRemoteState({ [revenueSnapshotsStorageKey]: nextSnapshots });
     if (!firedRevenueAlerts[todayKey]) {
       const nextAlert: AlertItem = {
         id: `revenue-${todayKey}`,
@@ -637,13 +728,13 @@ export function Dashboard({ data }: { data: DashboardData }) {
       const nextFiredRevenueAlerts = { ...firedRevenueAlerts, [todayKey]: true };
       setAlerts(nextAlerts);
       setFiredRevenueAlerts(nextFiredRevenueAlerts);
-      window.localStorage.setItem(alertsStorageKey, JSON.stringify(nextAlerts));
-      window.localStorage.setItem(firedRevenueAlertsStorageKey, JSON.stringify(nextFiredRevenueAlerts));
+      writeLocalState({ [alertsStorageKey]: nextAlerts, [firedRevenueAlertsStorageKey]: nextFiredRevenueAlerts });
+      void writeRemoteState({ [alertsStorageKey]: nextAlerts, [firedRevenueAlertsStorageKey]: nextFiredRevenueAlerts });
     }
-  }, [alerts, firedRevenueAlerts, games, revenueSnapshots]);
+  }, [alerts, firedRevenueAlerts, games, revenueSnapshots, stateLoaded]);
 
   useEffect(() => {
-    if (games.length === 0) return;
+    if (!stateLoaded || games.length === 0) return;
 
     const refresh = async () => {
       const refreshed = await Promise.all(
@@ -676,16 +767,18 @@ export function Dashboard({ data }: { data: DashboardData }) {
     const interval = window.setInterval(refresh, 60_000);
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [games.length]);
+  }, [games.length, stateLoaded]);
 
   function saveGames(nextGames: GameCard[]) {
     setGames(nextGames);
-    window.localStorage.setItem(gamesStorageKey, JSON.stringify(nextGames));
+    writeLocalState({ [gamesStorageKey]: nextGames });
+    void writeRemoteState({ [gamesStorageKey]: nextGames });
   }
 
   function saveNiches(nextNiches: Niche[]) {
     setNiches(nextNiches);
-    window.localStorage.setItem(nichesStorageKey, JSON.stringify(nextNiches));
+    writeLocalState({ [nichesStorageKey]: nextNiches });
+    void writeRemoteState({ [nichesStorageKey]: nextNiches });
   }
 
   function upsertGame(game: GameCard) {
@@ -726,8 +819,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
     const nextAlerts = [nextAlert, ...alerts].slice(0, 20);
     setClosedMonths(nextClosedMonths);
     setAlerts(nextAlerts);
-    window.localStorage.setItem(closedMonthsStorageKey, JSON.stringify(nextClosedMonths));
-    window.localStorage.setItem(alertsStorageKey, JSON.stringify(nextAlerts));
+    writeLocalState({ [closedMonthsStorageKey]: nextClosedMonths, [alertsStorageKey]: nextAlerts });
+    void writeRemoteState({ [closedMonthsStorageKey]: nextClosedMonths, [alertsStorageKey]: nextAlerts });
   }
 
   return (

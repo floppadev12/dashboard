@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "build": "prisma generate && next build",
+    "start": "prisma db push && next start",
     "serve": "next start --hostname 127.0.0.1 --port 3000",
     "lint": "next lint",
     "prisma:generate": "prisma generate",

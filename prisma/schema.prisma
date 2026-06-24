@@ -51,3 +51,10 @@ model Segment {
   color    String
   icon     String?
 }
+
+model AppState {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+}
