@@ -511,10 +511,15 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [seenAlertCount, setSeenAlertCount] = useState(0);
   const [closedMonths, setClosedMonths] = useState<ClosedMonths>({});
   const [stateLoaded, setStateLoaded] = useState(false);
+  const gamesRef = useRef<GameCard[]>([]);
   const notificationRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLDivElement | null>(null);
   useOutsideClick(notificationRef, notificationsOpen, () => setNotificationsOpen(false));
   useOutsideClick(searchRef, searchOpen, () => setSearchOpen(false));
+
+  useEffect(() => {
+    gamesRef.current = games;
+  }, [games]);
 
   const sortedGames = useMemo(() => [...games].sort((a, b) => b.ccu - a.ccu), [games]);
   const visibleGames = useMemo(() => {
@@ -746,8 +751,10 @@ export function Dashboard({ data }: { data: DashboardData }) {
     if (!stateLoaded || games.length === 0) return;
 
     const refresh = async () => {
+      const currentGames = gamesRef.current;
+      if (currentGames.length === 0) return;
       const refreshed = await Promise.all(
-        games.map(async (game) => {
+        currentGames.map(async (game) => {
           try {
             const response = await fetch("/api/roblox", {
               method: "POST",
