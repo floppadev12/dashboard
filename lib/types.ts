@@ -9,6 +9,7 @@ export type GameCard = {
   id: string;
   title: string;
   link: string;
+  linkUpdatedAt?: number;
   thumbnail: string;
   groupName: string;
   arpdau: string;

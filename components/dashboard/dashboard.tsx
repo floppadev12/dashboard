@@ -113,6 +113,7 @@ function normalizeGame(game: Partial<GameCard> & { onlineCount?: string }): Game
     id: game.id ?? crypto.randomUUID(),
     title: game.title ?? "Untitled Game",
     link: game.link ?? "https://www.roblox.com/games",
+    linkUpdatedAt: Number.isFinite(game.linkUpdatedAt) ? Number(game.linkUpdatedAt) : 0,
     thumbnail: game.thumbnail ?? "",
     groupName: game.groupName ?? "Your Studio",
     arpdau: game.arpdau ?? "0",
@@ -1676,10 +1677,12 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
     }
 
     const live = await fetchCcu(parsedLink);
+    const linkChanged = !game || game.link !== parsedLink;
     onSubmit({
       id: game?.id ?? crypto.randomUUID(),
       title: name.trim(),
       link: parsedLink,
+      linkUpdatedAt: linkChanged ? Date.now() : game?.linkUpdatedAt ?? 0,
       thumbnail,
       groupName: live.groupName ?? groupName.trim(),
       arpdau: arpdau.trim(),
