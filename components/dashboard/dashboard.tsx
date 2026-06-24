@@ -832,9 +832,6 @@ export function Dashboard({ data }: { data: DashboardData }) {
                 {visibleGames.map((game) => (
                   <GameOverviewCard key={game.id} game={game} rank={sortedGames.findIndex((rankedGame) => rankedGame.id === game.id) + 1} onEdit={() => setEditingGame(game)} onDelete={() => deleteGame(game.id)} />
                 ))}
-                <button className="grid h-[154px] place-items-center rounded-md border border-dashed border-slate-600/50 text-slate-300 transition hover:border-purple-400 hover:bg-purple-500/5 hover:text-white" onClick={() => setIsAddOpen(true)} type="button">
-                  <Plus className="h-8 w-8 rounded-full border border-slate-600 p-1" />
-                </button>
               </CardContent>
             </Card>
 
@@ -1176,9 +1173,6 @@ function MonthlyReportView({
           <div className="max-w-sm">
             <h1 className="text-2xl font-semibold">{monthLabel}</h1>
             <p className="mt-2 text-sm text-slate-400">Awaiting Month End...</p>
-            {monthKey === "2026-06" ? (
-              <Button className="mt-6" onClick={onCloseMonth}>Close June Now</Button>
-            ) : null}
           </div>
         </CardContent>
       </Card>
