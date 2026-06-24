@@ -1,0 +1,53 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Game {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  title     String
+  link      String
+  thumbnail String
+  groupName String   @default("Your Studio")
+  arpdau    String   @default("0")
+  ccu       Int      @default(0)
+  visits    Int      @default(0)
+  universeId Int?
+  online    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  snapshots Snapshot[]
+}
+
+model Snapshot {
+  id        String   @id @default(cuid())
+  gameId    String?
+  game      Game?    @relation(fields: [gameId], references: [id])
+  label     String
+  players   Int
+  sessions  Int
+  revenue   Int
+  createdAt DateTime @default(now())
+}
+
+model Alert {
+  id        String   @id @default(cuid())
+  title     String
+  body      String
+  severity  String
+  tone      String
+  createdAt DateTime @default(now())
+}
+
+model Segment {
+  id       String @id @default(cuid())
+  kind     String
+  label    String
+  value    Int
+  color    String
+  icon     String?
+}
