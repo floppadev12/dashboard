@@ -231,7 +231,7 @@ function formatCompact(value: number) {
 }
 
 function formatPlainNumber(value: number) {
-  return String(Math.max(0, Math.round(value)));
+  return Math.max(0, Math.round(value)).toLocaleString("en-US");
 }
 
 function formatUsd(value: number) {
@@ -502,15 +502,24 @@ function buildRangeData(data: ChartPoint[], range: PlayerRange | RevenueRange, k
 function buildCcuChartData(snapshots: CcuSnapshot[], currentPlayers: number, range: PlayerRange): ChartPoint[] {
   const now = Date.now();
   const rangeMs = range === "3h" ? 3 * 60 * 60_000 : range === "12h" ? 12 * 60 * 60_000 : range === "1d" ? 24 * 60 * 60_000 : range === "7d" ? 7 * 24 * 60 * 60_000 : 14 * 24 * 60 * 60_000;
-  const relevant = snapshots.filter((snapshot) => snapshot.timestamp >= now - rangeMs);
+  const intervalMs = range === "3h" ? 30 * 60_000 : 60 * 60_000;
+  const endTime = range.includes("h") ? Math.ceil(now / intervalMs) * intervalMs : now;
+  const startTime = endTime - rangeMs;
+  const relevant = snapshots.filter((snapshot) => snapshot.timestamp >= startTime && snapshot.timestamp <= endTime).sort((a, b) => a.timestamp - b.timestamp);
   const source = relevant.length > 0 ? relevant : [{ timestamp: now, players: currentPlayers }];
 
   if (range.includes("h")) {
-    return source.map((snapshot) => {
-      const date = new Date(snapshot.timestamp);
+    const points = Math.floor(rangeMs / intervalMs) + 1;
+    return Array.from({ length: points }, (_, index) => {
+      const timestamp = startTime + index * intervalMs;
+      const fallback = source[0]?.players ?? currentPlayers;
+      const players = source.reduce((latest, snapshot) => (
+        snapshot.timestamp <= timestamp ? snapshot.players : latest
+      ), fallback);
+      const date = new Date(timestamp);
       return {
         label: date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false }),
-        players: snapshot.players,
+        players,
         revenue: 0,
         sessions: 0
       };
