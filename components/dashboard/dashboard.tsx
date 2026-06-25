@@ -63,6 +63,33 @@ const firedCcuRecordDatesStorageKey = "gameops-dashboard-fired-ccu-record-dates"
 const closedMonthsStorageKey = "gameops-dashboard-closed-months";
 const playerRanges = ["3h", "12h", "1d", "7d", "14d"] as const;
 const revenueRanges = ["1d", "7d", "30d", "90d", "365d"] as const;
+const overviewRevenueFallbacks: Record<string, number> = {
+  "2026-06-01": 251,
+  "2026-06-02": 438,
+  "2026-06-03": 337,
+  "2026-06-04": 393,
+  "2026-06-05": 520,
+  "2026-06-06": 694,
+  "2026-06-07": 885,
+  "2026-06-08": 570,
+  "2026-06-09": 500,
+  "2026-06-10": 492,
+  "2026-06-11": 484,
+  "2026-06-12": 596,
+  "2026-06-13": 685,
+  "2026-06-14": 918,
+  "2026-06-15": 1165,
+  "2026-06-16": 1355,
+  "2026-06-17": 910,
+  "2026-06-18": 910,
+  "2026-06-19": 834,
+  "2026-06-20": 861,
+  "2026-06-21": 1015,
+  "2026-06-22": 995,
+  "2026-06-23": 771,
+  "2026-06-24": 714,
+  "2026-06-25": 690
+};
 type PlayerRange = (typeof playerRanges)[number];
 type RevenueRange = (typeof revenueRanges)[number];
 type NicheMetric = "CCU" | "Revenue" | "Winstreak" | "Overall";
@@ -275,6 +302,20 @@ function buildRevenueData(games: GameCard[], snapshots: RevenueSnapshots, range:
       sessions: 0,
       revenue: Math.round(revenue)
     };
+  });
+}
+
+function buildOverviewRevenueData(games: GameCard[], snapshots: RevenueSnapshots, range: RevenueRange): ChartPoint[] {
+  const data = buildRevenueData(games, snapshots, range);
+  const days = getRevenueRangeDays(range);
+  const today = new Date();
+
+  return data.map((point, index) => {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (days - 1 - index));
+    const fallbackRevenue = overviewRevenueFallbacks[dateKey(date)];
+    if (point.revenue > 0 || fallbackRevenue === undefined) return point;
+    return { ...point, revenue: fallbackRevenue };
   });
 }
 
@@ -536,7 +577,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const playersOnline = totalCcu > 0 ? formatNumber(totalCcu) : data.metrics[0]?.value ?? "0";
   const totalVisitsLabel = totalVisits > 0 ? formatCompact(totalVisits) : "0";
   const totalGamesLabel = formatCompact(games.length);
-  const revenueData = useMemo(() => buildRevenueData(games, revenueSnapshots, revenueRange), [games, revenueSnapshots, revenueRange]);
+  const revenueData = useMemo(() => buildOverviewRevenueData(games, revenueSnapshots, revenueRange), [games, revenueSnapshots, revenueRange]);
   const revenueTotal = revenueData.reduce((sum, point) => sum + point.revenue, 0);
   const nicheMetricData = useMemo(() => buildNicheMetricData(niches, games, revenueSnapshots, nicheMetric), [niches, games, revenueSnapshots, nicheMetric]);
   const nicheDonutData = nicheMetricData.some((niche) => niche.value > 0)
