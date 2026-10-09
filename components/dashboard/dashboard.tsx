@@ -283,7 +283,7 @@ function gameAllTimeRevenue(game: GameCard, snapshots: RevenueSnapshots) {
 
 // "430k" → 430000, "1.8M" → 1800000
 function parseRobux(value: string) {
-  const match = value.replace(/[,s]/g, "").match(/^(d*.?d+)([kmb])?/i);
+  const match = value.replace(/[,\s]/g, "").match(/^(\d*\.?\d+)([kmb])?/i);
   if (!match) return 0;
   const scale = { k: 1e3, m: 1e6, b: 1e9 }[(match[2] ?? "").toLowerCase()] ?? 1;
   return Math.round(Number.parseFloat(match[1]) * scale);
