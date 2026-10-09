@@ -3,6 +3,7 @@
 import { type ChangeEvent, type FormEvent, type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import {
+  ArrowLeft,
   ArrowRight,
   BarChart3,
   Bell,
@@ -11,6 +12,7 @@ import {
   CircleDollarSign,
   Clock3,
   Edit3,
+  ExternalLink,
   Gamepad2,
   LayoutGrid,
   Megaphone,
@@ -588,6 +590,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [niches, setNiches] = useState<Niche[]>([]);
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editingGame, setEditingGame] = useState<GameCard | null>(null);
+  const [openGameId, setOpenGameId] = useState<string | null>(null);
   const [editingNiche, setEditingNiche] = useState<Niche | null>(null);
   const [isNicheOpen, setIsNicheOpen] = useState(false);
   const [playerRange, setPlayerRange] = useState<PlayerRange>("3h");
@@ -983,6 +986,9 @@ export function Dashboard({ data }: { data: DashboardData }) {
   }
 
   function deleteGame(gameId: string) {
+    const title = games.find((game) => game.id === gameId)?.title ?? "this game";
+    if (!window.confirm(`Delete ${title} from the dashboard?`)) return;
+    if (openGameId === gameId) setOpenGameId(null);
     saveGames(games.filter((game) => game.id !== gameId));
   }
 
@@ -1029,7 +1035,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
             {nav.map(([label, Icon], index) => (
               <button
                 key={label}
-                onClick={() => setActiveView(label)}
+                onClick={() => { setActiveView(label); setOpenGameId(null); }}
                 className={cn(
                   "flex h-10 w-full items-center gap-3 rounded-md px-3 text-xs font-medium text-slate-400 transition hover:bg-white/5 hover:text-white",
                   activeView === label && "bg-[#24105c] text-white shadow-glow ring-1 ring-purple-500/40"
@@ -1096,8 +1102,24 @@ export function Dashboard({ data }: { data: DashboardData }) {
             </div>
           </header>
 
-          {activeView === "Games" ? (
-            <GamesView games={visibleGames} snapshots={ccuSnapshots} revenueSnapshots={revenueSnapshots} onAddGame={() => setIsAddOpen(true)} />
+          {activeView === "Games" && games.some((game) => game.id === openGameId) ? (
+            <GameDetailView
+              game={games.find((game) => game.id === openGameId) as GameCard}
+              games={games}
+              niches={niches}
+              snapshots={revenueSnapshots}
+              onBack={() => setOpenGameId(null)}
+              onEdit={(game) => setEditingGame(game)}
+            />
+          ) : activeView === "Games" ? (
+            <GamesView
+              games={visibleGames}
+              revenueSnapshots={revenueSnapshots}
+              onAddGame={() => setIsAddOpen(true)}
+              onOpenGame={(game) => setOpenGameId(game.id)}
+              onEditGame={(game) => setEditingGame(game)}
+              onDeleteGame={(game) => deleteGame(game.id)}
+            />
           ) : activeView === "Revenue" ? (
             <RevenueView games={games} snapshots={revenueSnapshots} />
           ) : activeView.startsWith("month-") ? (
@@ -1641,7 +1663,7 @@ function RevenueMetric({ label, value, size = "normal" }: { label: string; value
   );
 }
 
-function GamesView({ games, snapshots, revenueSnapshots, onAddGame }: { games: GameCard[]; snapshots: CcuSnapshot[]; revenueSnapshots: RevenueSnapshots; onAddGame: () => void }) {
+function GamesView({ games, revenueSnapshots, onAddGame, onOpenGame, onEditGame, onDeleteGame }: { games: GameCard[]; revenueSnapshots: RevenueSnapshots; onAddGame: () => void; onOpenGame: (game: GameCard) => void; onEditGame: (game: GameCard) => void; onDeleteGame: (game: GameCard) => void }) {
   return (
     <div className="space-y-3">
       <Card>
@@ -1651,13 +1673,12 @@ function GamesView({ games, snapshots, revenueSnapshots, onAddGame }: { games: G
         </CardHeader>
         <CardContent className="grid justify-center gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {games.map((game) => {
-            const peakCcu = Math.max(game.ccu, ...snapshots.map((snapshot) => snapshot.players));
             const revenue = gameRevenueStats(game, revenueSnapshots);
             return (
               <div key={game.id} className="w-full max-w-[360px] overflow-hidden rounded-lg bg-white/[0.035]">
-                <GameOverviewCard game={game} rank={games.findIndex((rankedGame) => rankedGame.id === game.id) + 1} onEdit={() => undefined} onDelete={() => undefined} readonly />
-                <div className="space-y-2 p-4 text-center">
-                  <GameStat label="Peak CCU" value={formatNumber(peakCcu)} />
+                <GameOverviewCard game={game} rank={games.findIndex((rankedGame) => rankedGame.id === game.id) + 1} onEdit={() => onEditGame(game)} onDelete={() => onDeleteGame(game)} onOpen={() => onOpenGame(game)} />
+                <div className="cursor-pointer space-y-2 p-4 text-center" onClick={() => onOpenGame(game)}>
+                  <GameStat label="All time earnings" value={formatUsd(gameAllTimeRevenue(game, revenueSnapshots))} />
                   <GameStat label="AVG Revenue / day" value={formatUsd(revenue.average)} />
                   <GameStat label="Highest Earning Day" value={revenue.highest.key === "N/A" ? "N/A" : `${revenue.highest.key} · ${formatUsd(revenue.highest.revenue)}`} />
                   <GameStat label="Date of Creation" value={gameCreatedDate(game)} />
@@ -1674,6 +1695,231 @@ function GamesView({ games, snapshots, revenueSnapshots, onAddGame }: { games: G
           </button>
         </CardContent>
       </Card>
+    </div>
+  );
+}
+
+type GameStatsData = Record<string, Record<string, number>>;
+
+function latestStat(stats: GameStatsData, metric: string) {
+  const series = stats[metric] ?? {};
+  const day = Object.keys(series).sort().pop();
+  return day ? { day, value: series[day] } : undefined;
+}
+
+function averageStat(stats: GameStatsData, metric: string) {
+  const values = Object.values(stats[metric] ?? {});
+  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : undefined;
+}
+
+function formatUsdCents(value: number) {
+  return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function StatTile({ label, value, hint }: { label: string; value: ReactNode; hint?: string }) {
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <p className="text-xs font-semibold text-slate-500">{label}</p>
+        <p className="mt-2 text-xl font-semibold text-white">{value}</p>
+        {hint ? <p className="mt-1 truncate text-xs text-slate-500">{hint}</p> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function GameDetailView({ game, games, niches, snapshots, onBack, onEdit }: { game: GameCard; games: GameCard[]; niches: Niche[]; snapshots: RevenueSnapshots; onBack: () => void; onEdit: (game: GameCard) => void }) {
+  const [playerRange, setPlayerRange] = useState<PlayerRange>("1d");
+  const [revenueRange, setRevenueRange] = useState<RevenueRange>("30d");
+  const [history, setHistory] = useState<CcuHistory | undefined>(undefined);
+  const [stats, setStats] = useState<GameStatsData>({});
+  const [statsState, setStatsState] = useState<"loading" | "ready" | "failed">("loading");
+  const universeId = game.universeId;
+
+  useEffect(() => {
+    if (!universeId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await fetch(`/api/ccu?universeIds=${universeId}&range=${playerRange}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const result = (await response.json()) as { points?: CcuHistory["points"] };
+        if (!cancelled && result.points && result.points.length > 1) setHistory({ range: playerRange, points: result.points });
+      } catch {
+        // keep what is on screen
+      }
+    };
+    void load();
+    const interval = window.setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [universeId, playerRange]);
+
+  useEffect(() => {
+    if (!universeId) {
+      setStatsState("failed");
+      return;
+    }
+    let cancelled = false;
+    setStatsState("loading");
+    fetch(`/api/game-stats?universeId=${universeId}`, { cache: "no-store" })
+      .then((response) => response.json() as Promise<{ stats?: GameStatsData }>)
+      .then((result) => {
+        if (cancelled) return;
+        setStats(result.stats ?? {});
+        setStatsState(result.stats && Object.keys(result.stats).length > 0 ? "ready" : "failed");
+      })
+      .catch(() => {
+        if (!cancelled) setStatsState("failed");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [universeId]);
+
+  const one = [game];
+  const niche = niches.find((item) => item.id === game.nicheId)?.label;
+  const latestDay = latestRealDay();
+  const latestRevenue = latestDay ? dayRevenue(game, latestDay, snapshots) : 0;
+  const sumRange = (list: GameCard[], range: RevenueRange) => buildRevenueData(list, snapshots, range).reduce((sum, point) => sum + point.revenue, 0);
+  const last7 = sumRange(one, "7d");
+  const last30 = sumRange(one, "30d");
+  const all30 = sumRange(games, "30d");
+  const allTime = gameAllTimeRevenue(game, snapshots);
+  const revenueStats = gameRevenueStats(game, snapshots);
+  const revenueChart = buildRevenueData(one, snapshots, revenueRange);
+  const revenueChartTotal = revenueChart.reduce((sum, point) => sum + point.revenue, 0);
+  const playerChart = buildCcuChartData([], game.ccu, playerRange, history);
+
+  const months = Object.entries(
+    revenueDateKeys(snapshots).reduce<Record<string, number>>((acc, key) => {
+      acc[key.slice(0, 7)] = (acc[key.slice(0, 7)] ?? 0) + dayRevenue(game, key, snapshots);
+      return acc;
+    }, {})
+  ).filter(([, revenue]) => revenue > 0).sort(([a], [b]) => b.localeCompare(a));
+  const sources = Object.entries((universeId != null ? realAllTimeStore[String(universeId)]?.sources : undefined) ?? {})
+    .map(([source, robux]) => [source, robux * ROBUX_TO_USD] as const)
+    .filter(([, usd]) => usd > 0)
+    .sort((a, b) => b[1] - a[1]);
+
+  const pending = statsState === "loading" ? "…" : "N/A";
+  const number = (metric: string) => { const stat = latestStat(stats, metric); return stat ? formatNumber(stat.value) : pending; };
+  const percent = (metric: string) => { const stat = latestStat(stats, metric); return stat ? `${(stat.value * 100).toFixed(1)}%` : pending; };
+  const average = (metric: string, format: (value: number) => string) => { const value = averageStat(stats, metric); return value === undefined ? undefined : `30-day avg ${format(value)}`; };
+  const dau = latestStat(stats, "DailyActiveUsers");
+  const playtime = latestStat(stats, "AveragePlayTimeMinutesPerDAU");
+  const payerRevenue = latestStat(stats, "AverageRevenuePerPayingUser");
+  const peakSeries = Object.entries(stats.PeakConcurrentPlayers ?? {});
+  const peak = peakSeries.reduce<[string, number] | undefined>((best, entry) => (!best || entry[1] > best[1] ? entry : best), undefined);
+  const dauChart = Object.entries(stats.DailyActiveUsers ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([day, value]) => ({ label: `${Number(day.slice(5, 7))}/${Number(day.slice(8, 10))}`, players: Math.round(value), revenue: 0, sessions: 0 }));
+  const dauRevenue = dau && dau.value > 0 ? dayRevenue(game, dau.day, snapshots) / dau.value : undefined;
+
+  return (
+    <div className="space-y-3">
+      <Card>
+        <CardContent className="flex flex-wrap items-center gap-4 p-4">
+          <button type="button" onClick={onBack} aria-label="Back to games" className="grid h-9 w-9 place-items-center rounded-md text-slate-300 transition hover:bg-white/5 hover:text-white">
+            <ArrowLeft className="h-4 w-4" />
+          </button>
+          <img src={game.thumbnail} alt="" className="h-14 w-24 rounded-md object-cover" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-lg font-semibold">{game.title}</p>
+            <p className="truncate text-xs text-slate-400">{[game.groupName, niche, `Created ${gameCreatedDate(game)}`].filter(Boolean).join(" · ")}</p>
+          </div>
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-slate-100">
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+            {formatNumber(game.ccu)} Online
+          </span>
+          <a href={game.link} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-md bg-white/[0.05] px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/10">
+            <ExternalLink className="h-3.5 w-3.5" /> Open on Roblox
+          </a>
+          <button type="button" onClick={() => onEdit(game)} className="flex items-center gap-2 rounded-md bg-white/[0.05] px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/10">
+            <Edit3 className="h-3.5 w-3.5" /> Edit
+          </button>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile label={latestDay ? `Revenue on ${latestDay}` : "Latest day revenue"} value={formatUsd(latestRevenue)} hint="Newest day Roblox has reported" />
+        <StatTile label="Last 7 days" value={formatUsd(last7)} hint={`Avg ${formatUsd(last7 / 7)} per day`} />
+        <StatTile label="Last 30 days" value={<><span>{formatUsd(last30)}</span><RevenueChange value={revenueChange(one, snapshots, "30d")} /></>} hint={all30 > 0 ? `${Math.round((last30 / all30) * 100)}% of all games` : undefined} />
+        <StatTile label="All time earnings" value={formatUsd(allTime)} hint={revenueStats.highest.key === "N/A" ? undefined : `Best day ${revenueStats.highest.key} · ${formatUsd(revenueStats.highest.revenue)}`} />
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-2">
+        <TrendCard
+          title="Players"
+          value={`${formatNumber(game.ccu)} Online`}
+          color="#8f3fff"
+          dataKey="players"
+          data={playerChart}
+          ranges={playerRanges}
+          activeRange={playerRange}
+          onRangeChange={(range) => setPlayerRange(range as PlayerRange)}
+        />
+        <TrendCard
+          title="Revenue"
+          value={<span>{formatUsd(revenueChartTotal)}</span>}
+          color="#73f28f"
+          dataKey="revenue"
+          data={revenueChart}
+          money
+          ranges={revenueRanges}
+          activeRange={revenueRange}
+          onRangeChange={(range) => setRevenueRange(range as RevenueRange)}
+        />
+      </div>
+
+      <p className="text-xs text-slate-400">
+        {statsState === "failed"
+          ? "Roblox did not return player stats for this game."
+          : `Player stats from Roblox${dau ? ` for ${dau.day}` : ""}. Payer stats can be a day behind.`}
+      </p>
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile label="Daily active users" value={number("DailyActiveUsers")} hint={average("DailyActiveUsers", formatNumber)} />
+        <StatTile label="Monthly active users" value={number("MonthlyActiveUsers")} />
+        <StatTile label="Sessions that day" value={number("Visits")} hint={`${formatCompact(game.visits)} total visits`} />
+        <StatTile label="Avg playtime per player" value={playtime ? `${playtime.value.toFixed(1)} min` : pending} hint={average("AveragePlayTimeMinutesPerDAU", (value) => `${value.toFixed(1)} min`)} />
+        <StatTile label="Day 1 retention" value={percent("D1Retention")} hint={average("D1Retention", (value) => `${(value * 100).toFixed(1)}%`)} />
+        <StatTile label="Day 7 retention" value={percent("D7Retention")} hint={average("D7Retention", (value) => `${(value * 100).toFixed(1)}%`)} />
+        <StatTile label="Peak players (28 days)" value={peak ? formatNumber(peak[1]) : pending} hint={peak ? `On ${peak[0]}` : undefined} />
+        <StatTile label="Revenue per daily player" value={dauRevenue === undefined ? pending : `$${dauRevenue.toFixed(4)}`} hint={dau ? `On ${dau.day}` : undefined} />
+        <StatTile label="Paying users" value={number("PayingUsers")} hint={average("PayingUsers", formatNumber)} />
+        <StatTile label="Players who pay" value={percent("PayingUsersCVR")} hint={average("PayingUsersCVR", (value) => `${(value * 100).toFixed(1)}%`)} />
+        <StatTile label="Revenue per paying user" value={payerRevenue ? formatUsdCents(payerRevenue.value * ROBUX_TO_USD) : pending} hint={payerRevenue ? `${payerRevenue.value.toFixed(1)} Robux` : undefined} />
+        <StatTile label="Avg revenue per day" value={formatUsd(revenueStats.average)} hint="Across all days with sales" />
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-3">
+        {dauChart.length > 1 ? (
+          <TrendCard title="Daily Active Users" value={<span>{dau ? formatNumber(dau.value) : ""}</span>} color="#8f3fff" dataKey="players" data={dauChart} />
+        ) : (
+          <Card><CardHeader><CardTitle>Daily Active Users</CardTitle></CardHeader><CardContent><div className="rounded-md bg-white/[0.035] p-5 text-center text-sm text-slate-400">{statsState === "loading" ? "Loading…" : "No data"}</div></CardContent></Card>
+        )}
+        <Card>
+          <CardHeader><CardTitle>Revenue by Month</CardTitle></CardHeader>
+          <CardContent className="space-y-2">
+            {months.length === 0 ? (
+              <div className="rounded-md bg-white/[0.035] p-5 text-center text-sm text-slate-400">No revenue yet</div>
+            ) : months.map(([month, revenue]) => (
+              <RevenueListRow key={month} label={month} value={formatUsd(revenue)} />
+            ))}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle>Revenue by Source</CardTitle><span className="text-xs text-slate-400">All time</span></CardHeader>
+          <CardContent className="space-y-2">
+            {sources.length === 0 ? (
+              <div className="rounded-md bg-white/[0.035] p-5 text-center text-sm text-slate-400">No revenue yet</div>
+            ) : sources.map(([source, usd]) => (
+              <RevenueListRow key={source} label={source} value={formatUsd(usd)} />
+            ))}
+            {game.creatorRewards ? <RevenueListRow label="Creator Rewards (entered)" value={formatUsd(game.creatorRewards * ROBUX_TO_USD)} /> : null}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
@@ -1723,17 +1969,24 @@ function DarkMetricIcon({ type }: { type: "players" | "visits" | "games" }) {
   );
 }
 
-function GameOverviewCard({ game, rank, onEdit, onDelete, readonly = false }: { game: GameCard; rank?: number; onEdit: () => void; onDelete: () => void; readonly?: boolean }) {
+function GameOverviewCard({ game, rank, onEdit, onDelete, onOpen, readonly = false }: { game: GameCard; rank?: number; onEdit: () => void; onDelete: () => void; onOpen?: () => void; readonly?: boolean }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   useOutsideClick(menuRef, menuOpen, () => setMenuOpen(false));
 
   return (
     <div className="group relative h-[154px] overflow-hidden rounded-md bg-[#100f25] ring-1 ring-white/10 transition hover:-translate-y-0.5 hover:ring-purple-400/70">
-      <a href={game.link} target="_blank" rel="noreferrer" className="absolute inset-0">
-        <img src={game.thumbnail} alt="" className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-105" />
-        <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,.04)_0%,rgba(0,0,0,.2)_42%,rgba(0,0,0,.86)_100%)]" />
-      </a>
+      {onOpen ? (
+        <button type="button" onClick={onOpen} aria-label={`Open ${game.title}`} className="absolute inset-0 text-left">
+          <img src={game.thumbnail} alt="" className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-105" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,.04)_0%,rgba(0,0,0,.2)_42%,rgba(0,0,0,.86)_100%)]" />
+        </button>
+      ) : (
+        <a href={game.link} target="_blank" rel="noreferrer" className="absolute inset-0">
+          <img src={game.thumbnail} alt="" className="absolute inset-0 h-full w-full object-cover transition duration-300 group-hover:scale-105" />
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(0,0,0,.04)_0%,rgba(0,0,0,.2)_42%,rgba(0,0,0,.86)_100%)]" />
+        </a>
+      )}
       {rank && rank <= 3 ? <RankBadge rank={rank} /> : null}
       {!readonly ? <div ref={menuRef}>
         <button type="button" aria-label="Game options" onClick={() => setMenuOpen((open) => !open)} className="absolute right-2 top-2 z-20 grid h-8 w-8 place-items-center rounded-md bg-black/45 text-white backdrop-blur transition hover:bg-black/70" data-open={menuOpen}>
@@ -1741,10 +1994,10 @@ function GameOverviewCard({ game, rank, onEdit, onDelete, readonly = false }: { 
         </button>
         {menuOpen ? (
           <div className="absolute right-2 top-11 z-30 w-28 overflow-hidden rounded-md bg-[#111126] py-1 text-sm shadow-2xl ring-1 ring-white/10">
-          <button type="button" onClick={onEdit} className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-200 hover:bg-white/10">
+          <button type="button" onClick={() => { setMenuOpen(false); onEdit(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-200 hover:bg-white/10">
             <Edit3 className="h-3.5 w-3.5" /> Edit
           </button>
-          <button type="button" onClick={onDelete} className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-300 hover:bg-red-500/10">
+          <button type="button" onClick={() => { setMenuOpen(false); onDelete(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-300 hover:bg-red-500/10">
             <Trash2 className="h-3.5 w-3.5" /> Delete
           </button>
           </div>
@@ -1798,7 +2051,7 @@ function NicheRow({ item, onEdit, onDelete }: { item: Niche; onEdit: () => void;
         </button>
         {menuOpen ? (
           <div className="absolute right-0 top-8 z-20 w-28 overflow-hidden rounded-md bg-[#111126] py-1 text-sm shadow-2xl ring-1 ring-white/10">
-          <button type="button" onClick={onEdit} className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-200 hover:bg-white/10"><Edit3 className="h-3.5 w-3.5" /> Edit</button>
+          <button type="button" onClick={() => { setMenuOpen(false); onEdit(); }} className="flex w-full items-center gap-2 px-3 py-2 text-left text-slate-200 hover:bg-white/10"><Edit3 className="h-3.5 w-3.5" /> Edit</button>
           <button type="button" onClick={onDelete} className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-300 hover:bg-red-500/10"><Trash2 className="h-3.5 w-3.5" /> Delete</button>
           </div>
         ) : null}

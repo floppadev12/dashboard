@@ -222,3 +222,48 @@ export async function concurrentPlayers(universeIds: string[], range: CcuRange):
   ccuCache.set(cacheKey, { at: Date.now(), data });
   return data;
 }
+
+// ---- Per-game stats for the game detail page ---------------------------------
+const GAME_STAT_DAYS = 30;
+const GAME_STAT_METRICS = [
+  "DailyActiveUsers",
+  "MonthlyActiveUsers",
+  "Visits",
+  "AveragePlayTimeMinutesPerDAU",
+  "PayingUsers",
+  "PayingUsersCVR",
+  "AverageRevenuePerPayingUser",
+  "D1Retention",
+  "D7Retention",
+] as const;
+/** { metric: { "YYYY-MM-DD": value } }. PeakConcurrentPlayers covers the last 28 days. */
+export type GameStats = Record<string, Record<string, number>>;
+
+const gameStatsCache = new Map<string, { at: number; data: GameStats }>();
+
+export async function gameStats(universeId: string): Promise<GameStats> {
+  const hit = gameStatsCache.get(universeId);
+  if (hit && Date.now() - hit.at < CACHE_MS) return hit.data;
+
+  const data: GameStats = {};
+  const load = async (metric: string, days: number) => {
+    try {
+      const values = await queryMetric(universeId, metric, { granularity: "OneDay", ...range(days) });
+      const byDay: Record<string, number> = {};
+      for (const series of values) {
+        for (const point of series.dataPoints ?? []) {
+          const day = String(point.time ?? "").slice(0, 10);
+          if (day) byDay[day] = Number(point.value ?? 0);
+        }
+      }
+      data[metric] = byDay;
+    } catch {
+      // A missing metric just leaves its tile empty.
+    }
+  };
+  await Promise.all([...GAME_STAT_METRICS.map((metric) => load(metric, GAME_STAT_DAYS)), load("PeakConcurrentPlayers", 27)]);
+
+  if (Object.keys(data).length === 0) throw new Error("Roblox returned no stats for this game.");
+  gameStatsCache.set(universeId, { at: Date.now(), data });
+  return data;
+}
