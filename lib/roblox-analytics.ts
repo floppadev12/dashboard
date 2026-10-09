@@ -53,12 +53,17 @@ const iso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 type Series = NonNullable<NonNullable<Operation["response"]>["values"]>;
 
 /** Runs one DailyRevenue query and waits for the result. */
-async function queryRevenue(universeId: string, body: Record<string, unknown>): Promise<Series> {
+function queryRevenue(universeId: string, body: Record<string, unknown>) {
+  return queryMetric(universeId, "DailyRevenue", body);
+}
+
+/** Runs one metric query and waits for the result. */
+async function queryMetric(universeId: string, metric: string, body: Record<string, unknown>): Promise<Series> {
   const apiKey = apiKeyFor(universeId);
   if (!apiKey) throw new Error("No API key for this game.");
 
   let op = await call(`${API_BASE}/v1/universes/${encodeURIComponent(universeId)}/metrics`, apiKey, {
-    metric: "DailyRevenue",
+    metric,
     ...body,
   });
   const started = Date.now();
@@ -167,4 +172,53 @@ export async function allTimeForGames(universeIds: string[]) {
     }),
   );
   return allTime;
+}
+
+// ---- Concurrent players history ---------------------------------------------
+// PeakConcurrentPlayers, kept by Roblox for 28 days. `step` thins minute data out
+// so long ranges stay light (the highest value in each step is kept).
+const CCU_RANGES = {
+  "3h": { hours: 3, granularity: "OneMinute", step: 1, cacheMs: 60_000 },
+  "12h": { hours: 12, granularity: "OneMinute", step: 3, cacheMs: 5 * 60_000 },
+  "1d": { hours: 24, granularity: "OneMinute", step: 5, cacheMs: 10 * 60_000 },
+  "7d": { hours: 7 * 24, granularity: "OneHour", step: 1, cacheMs: 15 * 60_000 },
+  "14d": { hours: 14 * 24, granularity: "OneHour", step: 1, cacheMs: 15 * 60_000 },
+} as const;
+export type CcuRange = keyof typeof CCU_RANGES;
+export const isCcuRange = (value: string): value is CcuRange => value in CCU_RANGES;
+export type CcuPoint = { t: number; players: number };
+
+const ccuCache = new Map<string, { at: number; data: CcuPoint[] }>();
+
+/** Players online over time, added up across the given games. */
+export async function concurrentPlayers(universeIds: string[], range: CcuRange): Promise<CcuPoint[]> {
+  const { hours, granularity, step, cacheMs } = CCU_RANGES[range];
+  const cacheKey = `${range}:${universeIds.join(",")}`;
+  const hit = ccuCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < cacheMs) return hit.data;
+
+  const end = new Date();
+  const start = new Date(end.getTime() - hours * 3_600_000);
+  const perGame = await Promise.all(
+    universeIds.map((id) => queryMetric(id, "PeakConcurrentPlayers", { granularity, startTime: iso(start), endTime: iso(end) })),
+  );
+
+  const stepMs = step * 60_000;
+  const totals = new Map<number, number>();
+  for (const values of perGame) {
+    const game = new Map<number, number>();
+    for (const series of values) {
+      for (const point of series.dataPoints ?? []) {
+        const time = Date.parse(String(point.time ?? ""));
+        if (!Number.isFinite(time)) continue;
+        const bucket = step > 1 ? Math.floor(time / stepMs) * stepMs : time;
+        game.set(bucket, Math.max(game.get(bucket) ?? 0, Number(point.value ?? 0)));
+      }
+    }
+    game.forEach((players, bucket) => totals.set(bucket, (totals.get(bucket) ?? 0) + players));
+  }
+
+  const data = [...totals].sort((a, b) => a[0] - b[0]).map(([t, players]) => ({ t, players: Math.round(players) }));
+  ccuCache.set(cacheKey, { at: Date.now(), data });
+  return data;
 }

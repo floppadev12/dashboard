@@ -529,7 +529,23 @@ function buildRangeData(data: ChartPoint[], range: PlayerRange | RevenueRange, k
   }));
 }
 
-function buildCcuChartData(snapshots: CcuSnapshot[], currentPlayers: number, range: PlayerRange): ChartPoint[] {
+type CcuHistory = { range: PlayerRange; points: { t: number; players: number }[] };
+
+function buildCcuChartData(snapshots: CcuSnapshot[], currentPlayers: number, range: PlayerRange, history?: CcuHistory): ChartPoint[] {
+  // Real player history from Roblox (every minute for the short ranges, hourly for the long ones).
+  if (history && history.range === range && history.points.length > 1) {
+    return history.points.map((point) => {
+      const date = new Date(point.t);
+      const time = date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
+      return {
+        label: range === "7d" || range === "14d" ? `${date.getMonth() + 1}/${date.getDate()} ${time}` : time,
+        players: point.players,
+        revenue: 0,
+        sessions: 0
+      };
+    });
+  }
+
   const now = Date.now();
   const rangeMs = range === "3h" ? 3 * 60 * 60_000 : range === "12h" ? 12 * 60 * 60_000 : range === "1d" ? 24 * 60 * 60_000 : range === "7d" ? 7 * 24 * 60 * 60_000 : 14 * 24 * 60 * 60_000;
   const intervalMs = range === "3h" ? 30 * 60_000 : 60 * 60_000;
@@ -594,6 +610,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [stateLoaded, setStateLoaded] = useState(false);
   const [realRevenue, setRealRevenue] = useState<RealRevenue>({});
   setRealRevenueStore(realRevenue);
+  const [ccuHistory, setCcuHistory] = useState<CcuHistory | undefined>(undefined);
   const [realAllTime, setRealAllTime] = useState<AllTimeRevenue>({});
   realAllTimeStore = realAllTime;
   const [revenueErrors, setRevenueErrors] = useState<Record<string, string>>({});
@@ -628,7 +645,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const nicheDonutData = nicheMetricData.some((niche) => niche.value > 0)
     ? nicheMetricData
     : [{ id: "empty", label: "No data", value: 100, icon: "", color: "#3b3b4a" }];
-  const ccuChartData = useMemo(() => buildCcuChartData(ccuSnapshots, totalCcu, playerRange), [ccuSnapshots, totalCcu, playerRange]);
+  const ccuChartData = useMemo(() => buildCcuChartData(ccuSnapshots, totalCcu, playerRange, ccuHistory), [ccuSnapshots, totalCcu, playerRange, ccuHistory]);
 
   useEffect(() => {
     let cancelled = false;
@@ -877,6 +894,31 @@ export function Dashboard({ data }: { data: DashboardData }) {
     .filter((id): id is number => typeof id === "number" && id > 0)
     .sort((a, b) => a - b)
     .join(",");
+
+  useEffect(() => {
+    if (!stateLoaded || !universeIdsKey) return;
+    let cancelled = false;
+
+    const loadCcuHistory = async () => {
+      try {
+        const response = await fetch(`/api/ccu?universeIds=${universeIdsKey}&range=${playerRange}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const result = (await response.json()) as { points?: CcuHistory["points"]; error?: string };
+        if (cancelled) return;
+        if (result.error) console.warn("Roblox player history error:", result.error);
+        if (result.points && result.points.length > 1) setCcuHistory({ range: playerRange, points: result.points });
+      } catch {
+        // Keep the recorded snapshots if Roblox can't be reached.
+      }
+    };
+
+    void loadCcuHistory();
+    const interval = window.setInterval(loadCcuHistory, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [stateLoaded, universeIdsKey, playerRange]);
 
   useEffect(() => {
     if (!stateLoaded || !universeIdsKey) return;
@@ -2135,14 +2177,14 @@ function TrendCard({
               </defs>
               <CartesianGrid vertical horizontal={false} stroke="rgba(255,255,255,0.16)" strokeDasharray="3 5" />
               <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "#85849c", fontSize: 12 }} minTickGap={18} />
-              <YAxis tickLine={false} axisLine={false} tick={{ fill: "#85849c", fontSize: 12 }} tickFormatter={(v) => money ? formatUsd(Number(v)) : `${Number(v) / 1000}K`} />
+              <YAxis tickLine={false} axisLine={false} tick={{ fill: "#85849c", fontSize: 12 }} domain={money ? [0, "auto"] : ["auto", "auto"]} tickFormatter={(v) => money ? formatUsd(Number(v)) : `${Number(v) / 1000}K`} />
               <Tooltip contentStyle={{ background: "#101025", border: "1px solid rgba(255,255,255,.1)", borderRadius: 8 }} />
               <Area
                 style={{ filter: `drop-shadow(0 0 6px ${hexToRgba(color, 0.5)})` }}
                 type="monotone"
                 dataKey={dataKey}
                 stroke={color}
-                strokeWidth={4}
+                strokeWidth={money ? 4 : 2.5}
                 fill={`url(#grad-${dataKey})`}
                 dot={false}
                 activeDot={{ r: 5, fill: color }}
