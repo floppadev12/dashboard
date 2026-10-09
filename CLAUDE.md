@@ -5,7 +5,8 @@ Revenue and operations dashboard for the owner's Roblox games, including
 
 ## Stack
 Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 3, Recharts, lucide-react,
-Prisma 6 + PostgreSQL (optional). Hosted on Vercel, auto-deploys on push to `main`.
+Prisma 6 + PostgreSQL (optional). Hosted on Railway (project `humorous-dream`, service
+`dashboard`), NOT Vercel. Auto-deploys on push to `main`. Env vars live in Railway → Variables.
 
 ## How it works
 - `components/dashboard/dashboard.tsx` is the whole UI (Overview, Games, Revenue,
@@ -25,7 +26,10 @@ Prisma 6 + PostgreSQL (optional). Hosted on Vercel, auto-deploys on push to `mai
   real data, otherwise the old estimate (visit delta × ARPDAU × 0.0038).
 - Auth: `ROBLOX_API_KEY` (one key, all games) or `ROBLOX_API_KEYS` JSON per universe.
   Keys must have only `universe-analytics` → `universe.analytics:read`.
-- Creator Rewards / engagement payouts may not be included in `DailyRevenue`.
+- `/api/revenue` also returns `allTime`: each game's all-time Robux (1460 days, granularity
+  `None`) broken down by `RevenueSource`. The Revenue page's "All time earnings" and
+  "Highest Earning Games" use it. Roblox has no separate Creator Rewards metric; it only
+  counts if it shows up as a `RevenueSource`.
 
 ## Other additions
 - `middleware.ts`: Basic-auth password (`DASHBOARD_PASSWORD`) for everything except
@@ -48,4 +52,5 @@ Prisma 6 + PostgreSQL (optional). Hosted on Vercel, auto-deploys on push to `mai
 ## Status
 The real-revenue / Discord / password version builds cleanly (`npm run build`, no
 TypeScript errors). In production the dashboard returns 503 until `DASHBOARD_PASSWORD`
-is set on Vercel.
+is set on Railway. `vercel.json` cron does not run on Railway, so the daily Discord
+report has no timer yet.

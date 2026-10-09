@@ -9,7 +9,7 @@ type Operation = {
   path?: string;
   done?: boolean;
   error?: unknown;
-  response?: { values?: { dataPoints?: { time?: string; value?: number | string }[] }[] };
+  response?: { values?: { breakdowns?: { dimension?: string; value?: string }[]; dataPoints?: { time?: string; value?: number | string }[] }[] };
 };
 
 /** One key for all games (ROBLOX_API_KEY), or per-game keys (ROBLOX_API_KEYS={"universeId":"key"}). */
@@ -50,22 +50,16 @@ async function call(url: string, apiKey: string, body?: unknown): Promise<Operat
 
 const iso = (d: Date) => d.toISOString().replace(/\.\d{3}Z$/, "Z");
 
-/** Robux per UTC day for one game: { "YYYY-MM-DD": robux }. Days without sales are absent. */
-export async function dailyRevenue(universeId: string, days: number): Promise<Record<string, number>> {
+type Series = NonNullable<NonNullable<Operation["response"]>["values"]>;
+
+/** Runs one DailyRevenue query and waits for the result. */
+async function queryRevenue(universeId: string, body: Record<string, unknown>): Promise<Series> {
   const apiKey = apiKeyFor(universeId);
   if (!apiKey) throw new Error("No API key for this game.");
 
-  const end = new Date();
-  end.setUTCHours(0, 0, 0, 0);
-  end.setUTCDate(end.getUTCDate() + 1);
-  const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - days);
-
   let op = await call(`${API_BASE}/v1/universes/${encodeURIComponent(universeId)}/metrics`, apiKey, {
     metric: "DailyRevenue",
-    granularity: "OneDay",
-    startTime: iso(start),
-    endTime: iso(end),
+    ...body,
   });
   const started = Date.now();
   while (!op.done) {
@@ -75,9 +69,24 @@ export async function dailyRevenue(universeId: string, days: number): Promise<Re
     op = await call(`${API_BASE}/${op.path.replace(/^\//, "")}`, apiKey);
   }
   if (op.error) throw new Error(JSON.stringify(op.error).slice(0, 160));
+  return op.response?.values ?? [];
+}
 
+/** Start/end of the last `days` UTC days, including today. */
+function range(days: number) {
+  const end = new Date();
+  end.setUTCHours(0, 0, 0, 0);
+  end.setUTCDate(end.getUTCDate() + 1);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - days);
+  return { startTime: iso(start), endTime: iso(end) };
+}
+
+/** Robux per UTC day for one game: { "YYYY-MM-DD": robux }. Days without sales are absent. */
+export async function dailyRevenue(universeId: string, days: number): Promise<Record<string, number>> {
+  const values = await queryRevenue(universeId, { granularity: "OneDay", ...range(days) });
   const out: Record<string, number> = {};
-  for (const series of op.response?.values ?? []) {
+  for (const series of values) {
     for (const point of series.dataPoints ?? []) {
       const day = String(point.time ?? "").slice(0, 10);
       if (day) out[day] = (out[day] ?? 0) + Number(point.value ?? 0);
@@ -86,7 +95,35 @@ export async function dailyRevenue(universeId: string, days: number): Promise<Re
   return out;
 }
 
+// Roblox keeps 1468 days of revenue history; stay a little inside that.
+const ALL_TIME_DAYS = 1460;
+export type AllTimeRevenue = { total: number; sources: Record<string, number> };
+
+/**
+ * All-time Robux for one game, split by revenue source (in-experience sales,
+ * Creator Rewards, ...) so every source Roblox reports is counted.
+ */
+export async function allTimeRevenue(universeId: string): Promise<AllTimeRevenue> {
+  const body = { granularity: "None", ...range(ALL_TIME_DAYS) };
+  let values: Series;
+  try {
+    values = await queryRevenue(universeId, { ...body, breakdown: ["RevenueSource"] });
+  } catch {
+    values = await queryRevenue(universeId, body);
+  }
+  const sources: Record<string, number> = {};
+  let total = 0;
+  for (const series of values) {
+    const name = series.breakdowns?.map((b) => b.value).filter(Boolean).join(" / ") || "Total";
+    const amount = (series.dataPoints ?? []).reduce((sum, point) => sum + Number(point.value ?? 0), 0);
+    sources[name] = (sources[name] ?? 0) + amount;
+    total += amount;
+  }
+  return { total, sources };
+}
+
 const cache = new Map<string, { at: number; data: Record<string, number> }>();
+const allTimeCache = new Map<string, { at: number; data: AllTimeRevenue }>();
 
 export async function revenueForGames(universeIds: string[], days: number) {
   const revenue: Record<string, Record<string, number>> = {};
@@ -109,4 +146,25 @@ export async function revenueForGames(universeIds: string[], days: number) {
     }),
   );
   return { revenue, errors };
+}
+
+export async function allTimeForGames(universeIds: string[]) {
+  const allTime: Record<string, AllTimeRevenue> = {};
+  await Promise.all(
+    universeIds.map(async (id) => {
+      const hit = allTimeCache.get(id);
+      if (hit && Date.now() - hit.at < CACHE_MS) {
+        allTime[id] = hit.data;
+        return;
+      }
+      try {
+        const data = await allTimeRevenue(id);
+        allTimeCache.set(id, { at: Date.now(), data });
+        allTime[id] = data;
+      } catch {
+        // The dashboard falls back to adding up the daily numbers.
+      }
+    }),
+  );
+  return allTime;
 }

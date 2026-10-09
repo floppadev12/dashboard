@@ -252,6 +252,11 @@ function setRealRevenueStore(next: RealRevenue) {
   realRevenueVersion += 1;
 }
 
+// All-time Robux per universe ID, split by revenue source (sales, Creator Rewards, ...).
+type AllTimeRevenue = Record<string, { total: number; sources: Record<string, number> }>;
+let realAllTimeStore: AllTimeRevenue = {};
+let realRevenueErrors: Record<string, string> = {};
+
 function hasRealRevenue() {
   return Object.keys(realRevenueStore).length > 0;
 }
@@ -267,6 +272,23 @@ function dayRevenue(game: GameCard, key: string, snapshots: RevenueSnapshots) {
   const previous = snapshots[previousDateKey(key)]?.[game.id];
   if (current === undefined || previous === undefined) return 0;
   return Math.max(0, current - previous) * parseArpdau(game.arpdau) * ROBUX_TO_USD;
+}
+
+function gameAllTimeRevenue(game: GameCard, snapshots: RevenueSnapshots) {
+  const daily = revenueDateKeys(snapshots).reduce((sum, key) => sum + dayRevenue(game, key, snapshots), 0);
+  const real = game.universeId != null ? realAllTimeStore[String(game.universeId)] : undefined;
+  return real ? Math.max(real.total * ROBUX_TO_USD, daily) : daily;
+}
+
+function allTimeSources(games: GameCard[]) {
+  const totals: Record<string, number> = {};
+  games.forEach((game) => {
+    const real = game.universeId != null ? realAllTimeStore[String(game.universeId)] : undefined;
+    Object.entries(real?.sources ?? {}).forEach(([source, robux]) => {
+      totals[source] = (totals[source] ?? 0) + robux * ROBUX_TO_USD;
+    });
+  });
+  return Object.entries(totals).filter(([, usd]) => usd > 0).sort((a, b) => b[1] - a[1]);
 }
 
 function revenueDateKeys(snapshots: RevenueSnapshots) {
@@ -589,6 +611,10 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [stateLoaded, setStateLoaded] = useState(false);
   const [realRevenue, setRealRevenue] = useState<RealRevenue>({});
   setRealRevenueStore(realRevenue);
+  const [realAllTime, setRealAllTime] = useState<AllTimeRevenue>({});
+  realAllTimeStore = realAllTime;
+  const [revenueErrors, setRevenueErrors] = useState<Record<string, string>>({});
+  realRevenueErrors = revenueErrors;
   const gamesRef = useRef<GameCard[]>([]);
   const notificationRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLDivElement | null>(null);
@@ -877,10 +903,12 @@ export function Dashboard({ data }: { data: DashboardData }) {
       try {
         const response = await fetch(`/api/revenue?universeIds=${universeIdsKey}`, { cache: "no-store" });
         if (!response.ok) return;
-        const result = (await response.json()) as { configured?: boolean; revenue?: RealRevenue; errors?: Record<string, string> };
+        const result = (await response.json()) as { configured?: boolean; revenue?: RealRevenue; allTime?: AllTimeRevenue; errors?: Record<string, string> };
         if (cancelled || !result.configured) return;
         if (result.errors && Object.keys(result.errors).length) console.warn("Roblox revenue errors:", result.errors);
         setRealRevenue(result.revenue ?? {});
+        setRealAllTime(result.allTime ?? {});
+        setRevenueErrors(result.errors ?? {});
       } catch {
         // Keep the estimate if Roblox can't be reached.
       }
@@ -1243,9 +1271,11 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
   const previousMonthRows = rows.filter((row) => row.key.startsWith(previousMonth));
   const thisMonth = monthRows.reduce((sum, row) => sum + row.revenue, 0);
   const previousMonthEarnings = previousMonthRows.reduce((sum, row) => sum + row.revenue, 0);
-  const allTime = rows.reduce((sum, row) => sum + row.revenue, 0);
+  const allTime = games.reduce((sum, game) => sum + gameAllTimeRevenue(game, snapshots), 0);
+  const sources = allTimeSources(games);
+  const failedGames = games.filter((game) => game.universeId != null && realRevenueErrors[String(game.universeId)]);
   const highestDay = rows.reduce((best, row) => row.revenue > best.revenue ? row : best, { key: "N/A", revenue: 0 });
-  const avgDay = rows.length ? allTime / rows.length : 0;
+  const avgDay = rows.length ? rows.reduce((sum, row) => sum + row.revenue, 0) / rows.length : 0;
   const monthTotals = rows.reduce<Record<string, number>>((acc, row) => {
     const month = row.key.slice(0, 7);
     acc[month] = (acc[month] ?? 0) + row.revenue;
@@ -1258,7 +1288,7 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
     .sort(([a], [b]) => b.localeCompare(a))
     .slice(0, 8);
   const topGames = games
-    .map((game) => ({ game, revenue: gameRevenueStats(game, snapshots).average }))
+    .map((game) => ({ game, revenue: gameAllTimeRevenue(game, snapshots) }))
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 5);
   const chartData = buildRevenueData(games, snapshots, chartRange);
@@ -1271,6 +1301,16 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
           ? "Real revenue from Roblox (Robux converted at the DevEx rate of $0.0038). Today is still filling in."
           : "Estimated from visits × ARPDAU. Add your Roblox API key to see real revenue."}
       </p>
+      {sources.length > 0 ? (
+        <p className="text-xs text-slate-400">
+          All time by source: {sources.map(([source, usd]) => `${source} ${formatUsd(usd)}`).join(" · ")}
+        </p>
+      ) : null}
+      {failedGames.length > 0 ? (
+        <p className="text-xs text-rose-400">
+          Couldn&apos;t load real revenue for {failedGames.map((game) => game.title).join(", ")}: {realRevenueErrors[String(failedGames[0].universeId)]}
+        </p>
+      ) : null}
       <div className="grid gap-3 lg:grid-cols-3">
         <RevenueMetric label="Money made today" value={formatUsd(today)} size="large" />
         <RevenueMetric label="This month" value={formatUsd(thisMonth)} size="large" />
