@@ -144,6 +144,7 @@ function normalizeGame(game: Partial<GameCard> & { onlineCount?: string }): Game
     thumbnail: game.thumbnail ?? "",
     groupName: game.groupName ?? "Your Studio",
     arpdau: game.arpdau ?? "0",
+    creatorRewards: Number.isFinite(game.creatorRewards) ? Number(game.creatorRewards) : 0,
     ccu: Number.isFinite(game.ccu) ? Number(game.ccu) : ccuFromOldValue,
     visits: Number.isFinite(game.visits) ? Number(game.visits) : 0,
     addedAt: game.addedAt ?? dateKey(new Date()),
@@ -277,7 +278,15 @@ function dayRevenue(game: GameCard, key: string, snapshots: RevenueSnapshots) {
 function gameAllTimeRevenue(game: GameCard, snapshots: RevenueSnapshots) {
   const daily = revenueDateKeys(snapshots).reduce((sum, key) => sum + dayRevenue(game, key, snapshots), 0);
   const real = game.universeId != null ? realAllTimeStore[String(game.universeId)] : undefined;
-  return real ? Math.max(real.total * ROBUX_TO_USD, daily) : daily;
+  return (real ? Math.max(real.total * ROBUX_TO_USD, daily) : daily) + (game.creatorRewards ?? 0) * ROBUX_TO_USD;
+}
+
+// "430k" → 430000, "1.8M" → 1800000
+function parseRobux(value: string) {
+  const match = value.replace(/[,s]/g, "").match(/^(d*.?d+)([kmb])?/i);
+  if (!match) return 0;
+  const scale = { k: 1e3, m: 1e6, b: 1e9 }[(match[2] ?? "").toLowerCase()] ?? 1;
+  return Math.round(Number.parseFloat(match[1]) * scale);
 }
 
 function allTimeSources(games: GameCard[]) {
@@ -287,6 +296,7 @@ function allTimeSources(games: GameCard[]) {
     Object.entries(real?.sources ?? {}).forEach(([source, robux]) => {
       totals[source] = (totals[source] ?? 0) + robux * ROBUX_TO_USD;
     });
+    if (game.creatorRewards) totals["Creator Rewards (entered)"] = (totals["Creator Rewards (entered)"] ?? 0) + game.creatorRewards * ROBUX_TO_USD;
   });
   return Object.entries(totals).filter(([, usd]) => usd > 0).sort((a, b) => b[1] - a[1]);
 }
@@ -1770,6 +1780,7 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
   const [link, setLink] = useState(game?.link ?? "");
   const [groupName, setGroupName] = useState(game?.groupName ?? "");
   const [arpdau, setArpdau] = useState(game?.arpdau ?? "");
+  const [creatorRewards, setCreatorRewards] = useState(game?.creatorRewards ? String(game.creatorRewards) : "");
   const [nicheId, setNicheId] = useState(game?.nicheId ?? niches[0]?.id ?? "");
   const [thumbnail, setThumbnail] = useState(game?.thumbnail ?? "");
   const [error, setError] = useState("");
@@ -1828,6 +1839,7 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
       thumbnail,
       groupName: live.groupName ?? groupName.trim(),
       arpdau: arpdau.trim(),
+      creatorRewards: parseRobux(creatorRewards),
       ccu: live.ccu,
       visits: live.visits,
       addedAt: game?.addedAt ?? dateKey(new Date()),
@@ -1851,6 +1863,7 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
         <InputField label="Game link" value={link} onChange={setLink} placeholder="https://www.roblox.com/games/..." />
         <InputField label="Group name" value={groupName} onChange={setGroupName} placeholder="Your Roblox group" />
         <InputField label="ARPDAU" value={arpdau} onChange={setArpdau} placeholder="Average Robux per visit" />
+        <InputField label="Creator Rewards (all-time Robux)" value={creatorRewards} onChange={setCreatorRewards} placeholder="Optional, e.g. 430k or 1.8M" />
         <label className="mb-4 block">
           <span className="mb-2 block text-xs font-medium text-slate-300">Niche</span>
           <select value={nicheId} onChange={(event) => setNicheId(event.target.value)} className="h-10 w-full rounded-md border border-white/10 bg-[#0d0d20] px-3 text-sm outline-none transition focus:border-purple-400">

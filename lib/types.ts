@@ -13,6 +13,8 @@ export type GameCard = {
   thumbnail: string;
   groupName: string;
   arpdau: string;
+  /** All-time Creator Rewards in Robux, typed in by hand (Roblox has no API for it). */
+  creatorRewards?: number;
   ccu: number;
   visits: number;
   addedAt?: string;
