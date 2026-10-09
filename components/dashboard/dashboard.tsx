@@ -266,7 +266,40 @@ function realSeries(game: GameCard) {
   return game.universeId != null ? realRevenueStore[String(game.universeId)] : undefined;
 }
 
+// Roblox gives no per-day Creator Rewards, so a game's entered all-time amount is
+// spread over its days in proportion to that day's real sales (or evenly since the
+// game was created when there is no real data). USD per day.
+const rewardShareCache = new Map<string, { stamp: string; perDay: Record<string, number> }>();
+
+function creatorRewardsByDay(game: GameCard) {
+  const total = (game.creatorRewards ?? 0) * ROBUX_TO_USD;
+  const today = dateKey(new Date());
+  const stamp = `${realRevenueVersion}:${total}:${today}`;
+  const hit = rewardShareCache.get(game.id);
+  if (hit?.stamp === stamp) return hit.perDay;
+
+  const perDay: Record<string, number> = {};
+  if (total > 0) {
+    const real = realSeries(game) ?? {};
+    const sales = Object.values(real).reduce((sum, robux) => sum + robux, 0);
+    if (sales > 0) {
+      Object.entries(real).forEach(([day, robux]) => { perDay[day] = (total * robux) / sales; });
+    } else {
+      const first = [game.createdAt, game.addedAt].map((value) => (value ?? "").slice(0, 10)).find((value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && value <= today) ?? today;
+      const days: string[] = [];
+      for (let day = today; day >= first && days.length < 1460; day = previousDateKey(day)) days.push(day);
+      days.forEach((day) => { perDay[day] = total / days.length; });
+    }
+  }
+  rewardShareCache.set(game.id, { stamp, perDay });
+  return perDay;
+}
+
 function dayRevenue(game: GameCard, key: string, snapshots: RevenueSnapshots) {
+  return salesDayRevenue(game, key, snapshots) + (creatorRewardsByDay(game)[key] ?? 0);
+}
+
+function salesDayRevenue(game: GameCard, key: string, snapshots: RevenueSnapshots) {
   const real = realSeries(game);
   if (real) return (real[key] ?? 0) * ROBUX_TO_USD;
   const current = snapshots[key]?.[game.id];
@@ -276,7 +309,7 @@ function dayRevenue(game: GameCard, key: string, snapshots: RevenueSnapshots) {
 }
 
 function gameAllTimeRevenue(game: GameCard, snapshots: RevenueSnapshots) {
-  const daily = revenueDateKeys(snapshots).reduce((sum, key) => sum + dayRevenue(game, key, snapshots), 0);
+  const daily = revenueDateKeys(snapshots).reduce((sum, key) => sum + salesDayRevenue(game, key, snapshots), 0);
   const real = game.universeId != null ? realAllTimeStore[String(game.universeId)] : undefined;
   return (real ? Math.max(real.total * ROBUX_TO_USD, daily) : daily) + (game.creatorRewards ?? 0) * ROBUX_TO_USD;
 }
@@ -1308,7 +1341,7 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
     <div className="space-y-3">
       <p className="text-xs text-slate-400">
         {hasRealRevenue()
-          ? "Real revenue from Roblox (Robux converted at the DevEx rate of $0.0038). Today is still filling in."
+          ? "Real revenue from Roblox (Robux converted at the DevEx rate of $0.0038). Today is still filling in. Entered Creator Rewards are spread over the days in proportion to each day's sales."
           : "Estimated from visits × ARPDAU. Add your Roblox API key to see real revenue."}
       </p>
       {sources.length > 0 ? (
