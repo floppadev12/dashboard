@@ -39,6 +39,7 @@ const nav = [
   ["Revenue", CircleDollarSign]
 ] as const;
 const monthlyPages = [
+  { key: "2026-05", label: "May 2026" },
   { key: "2026-06", label: "June 2026" },
   { key: "2026-07", label: "July 2026" },
   { key: "2026-08", label: "August 2026" },
