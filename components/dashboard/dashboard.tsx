@@ -1526,7 +1526,7 @@ function MonthlyReportView({
                 <CartesianGrid vertical horizontal={false} stroke="rgba(255,255,255,0.16)" strokeDasharray="3 5" />
                 <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "#85849c", fontSize: 12 }} minTickGap={14} />
                 <YAxis tickLine={false} axisLine={false} tick={{ fill: "#85849c", fontSize: 12 }} tickFormatter={(value) => formatUsd(Number(value))} />
-                <Tooltip contentStyle={{ background: "#101025", border: "1px solid rgba(255,255,255,.1)", borderRadius: 8 }} />
+                <Tooltip contentStyle={{ background: "#101025", border: "1px solid rgba(255,255,255,.1)", borderRadius: 8 }} separator="" formatter={(value) => [formatUsd(Number(value)), ""]} />
                 {Object.entries(releaseMarkers).map(([label, titles]) => (
                   <ReferenceLine
                     key={label}
@@ -2178,7 +2178,7 @@ function TrendCard({
               <CartesianGrid vertical horizontal={false} stroke="rgba(255,255,255,0.16)" strokeDasharray="3 5" />
               <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "#85849c", fontSize: 12 }} minTickGap={18} />
               <YAxis tickLine={false} axisLine={false} tick={{ fill: "#85849c", fontSize: 12 }} domain={money ? [0, "auto"] : ["auto", "auto"]} tickFormatter={(v) => money ? formatUsd(Number(v)) : `${Number(v) / 1000}K`} />
-              <Tooltip contentStyle={{ background: "#101025", border: "1px solid rgba(255,255,255,.1)", borderRadius: 8 }} />
+              <Tooltip contentStyle={{ background: "#101025", border: "1px solid rgba(255,255,255,.1)", borderRadius: 8 }} separator="" formatter={(value) => [money ? formatUsd(Number(value)) : `${formatPlainNumber(Number(value))} players`, ""]} />
               <Area
                 style={{ filter: `drop-shadow(0 0 6px ${hexToRgba(color, 0.5)})` }}
                 type="monotone"
