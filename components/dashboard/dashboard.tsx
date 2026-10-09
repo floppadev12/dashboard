@@ -63,33 +63,6 @@ const firedCcuRecordDatesStorageKey = "gameops-dashboard-fired-ccu-record-dates"
 const closedMonthsStorageKey = "gameops-dashboard-closed-months";
 const playerRanges = ["3h", "12h", "1d", "7d", "14d"] as const;
 const revenueRanges = ["1d", "7d", "30d", "90d", "365d"] as const;
-const overviewRevenueFallbacks: Record<string, number> = {
-  "2026-06-01": 251,
-  "2026-06-02": 438,
-  "2026-06-03": 337,
-  "2026-06-04": 393,
-  "2026-06-05": 520,
-  "2026-06-06": 694,
-  "2026-06-07": 885,
-  "2026-06-08": 570,
-  "2026-06-09": 500,
-  "2026-06-10": 492,
-  "2026-06-11": 484,
-  "2026-06-12": 596,
-  "2026-06-13": 685,
-  "2026-06-14": 918,
-  "2026-06-15": 1165,
-  "2026-06-16": 1355,
-  "2026-06-17": 910,
-  "2026-06-18": 910,
-  "2026-06-19": 834,
-  "2026-06-20": 861,
-  "2026-06-21": 1015,
-  "2026-06-22": 995,
-  "2026-06-23": 771,
-  "2026-06-24": 714,
-  "2026-06-25": 690
-};
 type PlayerRange = (typeof playerRanges)[number];
 type RevenueRange = (typeof revenueRanges)[number];
 type NicheMetric = "CCU" | "Revenue" | "Winstreak" | "Overall";
@@ -202,7 +175,7 @@ function normalizeAlerts(alerts: Array<Partial<AlertItem> & { time?: string }> =
       severity: alert.severity ?? "Medium",
       medal: alert.medal
     }) as AlertItem)
-    .filter((alert) => alert.title !== "ðŸŽ‰ First Revenue CCU!" && alert.medal !== undefined);
+    .filter((alert) => alert.title !== "ðŸŽ‰ First Revenue CCU!" && alert.medal !== undefined && !alert.body.endsWith(" tracked."));
 }
 
 function hasSharedState(state: PersistedState) {
@@ -243,6 +216,7 @@ function formatUsd(value: number) {
 // Robux per UTC day, keyed by universe ID. When a game has real data, it replaces
 // the visits × ARPDAU estimate everywhere on the dashboard.
 const ROBUX_TO_USD = 0.0038;
+const realRevenueCacheKey = "gameops-dashboard-real-revenue-cache";
 type RealRevenue = Record<string, Record<string, number>>;
 let realRevenueStore: RealRevenue = {};
 let realRevenueVersion = 0;
@@ -266,50 +240,29 @@ function realSeries(game: GameCard) {
   return game.universeId != null ? realRevenueStore[String(game.universeId)] : undefined;
 }
 
-// Roblox gives no per-day Creator Rewards, so a game's entered all-time amount is
-// spread over its days in proportion to that day's real sales (or evenly since the
-// game was created when there is no real data). USD per day.
-const rewardShareCache = new Map<string, { stamp: string; perDay: Record<string, number> }>();
+// Only real Roblox numbers: a day without real data counts as 0, never an estimate.
+function dayRevenue(game: GameCard, key: string, _snapshots: RevenueSnapshots) {
+  return (realSeries(game)?.[key] ?? 0) * ROBUX_TO_USD;
+}
 
-function creatorRewardsByDay(game: GameCard) {
-  const total = (game.creatorRewards ?? 0) * ROBUX_TO_USD;
-  const today = dateKey(new Date());
-  const stamp = `${realRevenueVersion}:${total}:${today}`;
-  const hit = rewardShareCache.get(game.id);
-  if (hit?.stamp === stamp) return hit.perDay;
-
-  const perDay: Record<string, number> = {};
-  if (total > 0) {
-    const real = realSeries(game) ?? {};
-    const sales = Object.values(real).reduce((sum, robux) => sum + robux, 0);
-    if (sales > 0) {
-      Object.entries(real).forEach(([day, robux]) => { perDay[day] = (total * robux) / sales; });
-    } else {
-      const first = [game.createdAt, game.addedAt].map((value) => (value ?? "").slice(0, 10)).find((value) => /^\d{4}-\d{2}-\d{2}$/.test(value) && value <= today) ?? today;
-      const days: string[] = [];
-      for (let day = today; day >= first && days.length < 1460; day = previousDateKey(day)) days.push(day);
-      days.forEach((day) => { perDay[day] = total / days.length; });
-    }
+// Roblox reports revenue about two days late. This is the newest day it has reported.
+let latestRealDayCache = { version: -1, day: "" };
+function latestRealDay() {
+  if (latestRealDayCache.version !== realRevenueVersion) {
+    let day = "";
+    Object.values(realRevenueStore).forEach((series) => Object.keys(series).forEach((key) => { if (key > day) day = key; }));
+    latestRealDayCache = { version: realRevenueVersion, day };
   }
-  rewardShareCache.set(game.id, { stamp, perDay });
-  return perDay;
+  return latestRealDayCache.day;
 }
 
-function dayRevenue(game: GameCard, key: string, snapshots: RevenueSnapshots) {
-  return salesDayRevenue(game, key, snapshots) + (creatorRewardsByDay(game)[key] ?? 0);
-}
-
-function salesDayRevenue(game: GameCard, key: string, snapshots: RevenueSnapshots) {
-  const real = realSeries(game);
-  if (real) return (real[key] ?? 0) * ROBUX_TO_USD;
-  const current = snapshots[key]?.[game.id];
-  const previous = snapshots[previousDateKey(key)]?.[game.id];
-  if (current === undefined || previous === undefined) return 0;
-  return Math.max(0, current - previous) * parseArpdau(game.arpdau) * ROBUX_TO_USD;
+function gameDailyRevenue(game: GameCard, snapshots: RevenueSnapshots) {
+  const latest = latestRealDay();
+  return latest ? dayRevenue(game, latest, snapshots) : 0;
 }
 
 function gameAllTimeRevenue(game: GameCard, snapshots: RevenueSnapshots) {
-  const daily = revenueDateKeys(snapshots).reduce((sum, key) => sum + salesDayRevenue(game, key, snapshots), 0);
+  const daily = revenueDateKeys(snapshots).reduce((sum, key) => sum + dayRevenue(game, key, snapshots), 0);
   const real = game.universeId != null ? realAllTimeStore[String(game.universeId)] : undefined;
   return (real ? Math.max(real.total * ROBUX_TO_USD, daily) : daily) + (game.creatorRewards ?? 0) * ROBUX_TO_USD;
 }
@@ -334,14 +287,10 @@ function allTimeSources(games: GameCard[]) {
   return Object.entries(totals).filter(([, usd]) => usd > 0).sort((a, b) => b[1] - a[1]);
 }
 
-function revenueDateKeys(snapshots: RevenueSnapshots) {
-  const keys = new Set(Object.keys(snapshots));
+function revenueDateKeys(_snapshots: RevenueSnapshots) {
+  const keys = new Set<string>();
   Object.values(realRevenueStore).forEach((series) => Object.keys(series).forEach((key) => keys.add(key)));
   return [...keys].sort();
-}
-
-function growthPercent(seed: number) {
-  return `+${(6 + (seed % 13) + ((seed % 7) / 10)).toFixed(1)}%`;
 }
 
 function hexToRgba(hex: string, alpha: number) {
@@ -379,18 +328,19 @@ function getRevenueRangeDays(range: RevenueRange) {
   return 90;
 }
 
-function buildRevenueData(games: GameCard[], snapshots: RevenueSnapshots, range: RevenueRange): ChartPoint[] {
+function buildRevenueData(games: GameCard[], snapshots: RevenueSnapshots, range: RevenueRange, periodsBack = 0): ChartPoint[] {
   const days = getRevenueRangeDays(range);
-  const today = new Date();
+  const end = new Date(`${latestRealDay() || dateKey(new Date())}T12:00:00Z`);
+  end.setUTCDate(end.getUTCDate() - days * periodsBack);
 
   return Array.from({ length: days }, (_, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() - (days - 1 - index));
+    const date = new Date(end);
+    date.setUTCDate(end.getUTCDate() - (days - 1 - index));
     const key = dateKey(date);
     const revenue = games.reduce((total, game) => total + dayRevenue(game, key, snapshots), 0);
 
     return {
-      label: range === "1d" ? "Today" : `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`,
+      label: `${date.getUTCMonth() + 1}/${date.getUTCDate()}/${date.getUTCFullYear()}`,
       players: 0,
       sessions: 0,
       revenue: Math.round(revenue)
@@ -398,19 +348,6 @@ function buildRevenueData(games: GameCard[], snapshots: RevenueSnapshots, range:
   });
 }
 
-function buildOverviewRevenueData(games: GameCard[], snapshots: RevenueSnapshots, range: RevenueRange): ChartPoint[] {
-  const data = buildRevenueData(games, snapshots, range);
-  const days = getRevenueRangeDays(range);
-  const today = new Date();
-
-  return data.map((point, index) => {
-    const date = new Date(today);
-    date.setDate(today.getDate() - (days - 1 - index));
-    const fallbackRevenue = overviewRevenueFallbacks[dateKey(date)];
-    if (point.revenue > 0 || fallbackRevenue === undefined || hasRealRevenue()) return point;
-    return { ...point, revenue: fallbackRevenue };
-  });
-}
 
 function formatDateLabel(value?: string) {
   if (!value) return "N/A";
@@ -482,14 +419,17 @@ function monthReportStats(games: GameCard[], snapshots: RevenueSnapshots, ccuSna
   };
 }
 
-function gameDailyRevenue(game: GameCard, snapshots: RevenueSnapshots) {
-  const todayKey = dateKey(new Date());
-  // Real data: use yesterday, the last complete UTC day.
-  if (realSeries(game)) return dayRevenue(game, previousDateKey(todayKey), snapshots);
-  const previousKey = previousDateKey(todayKey);
-  const currentVisits = snapshots[todayKey]?.[game.id] ?? game.visits;
-  const previousVisits = snapshots[previousKey]?.[game.id] ?? game.visits;
-  return Math.max(0, currentVisits - previousVisits) * parseArpdau(game.arpdau) * 0.0038;
+// Real change against the period just before, e.g. the last 30 days vs the 30 days before.
+function revenueChange(games: GameCard[], snapshots: RevenueSnapshots, range: RevenueRange) {
+  const sum = (points: ChartPoint[]) => points.reduce((total, point) => total + point.revenue, 0);
+  const before = sum(buildRevenueData(games, snapshots, range, 1));
+  if (before <= 0) return null;
+  return ((sum(buildRevenueData(games, snapshots, range)) - before) / before) * 100;
+}
+
+function RevenueChange({ value }: { value: number | null }) {
+  if (value === null) return null;
+  return <span className={`ml-2 text-sm font-semibold ${value < 0 ? "text-rose-400" : "text-emerald-400"}`}>{value >= 0 ? "+" : ""}{value.toFixed(1)}%</span>;
 }
 
 function buildNicheMetricData(niches: Niche[], games: GameCard[], snapshots: RevenueSnapshots, metric: NicheMetric) {
@@ -682,7 +622,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const playersOnline = totalCcu > 0 ? formatNumber(totalCcu) : data.metrics[0]?.value ?? "0";
   const totalVisitsLabel = totalVisits > 0 ? formatCompact(totalVisits) : "0";
   const totalGamesLabel = formatCompact(games.length);
-  const revenueData = useMemo(() => buildOverviewRevenueData(games, revenueSnapshots, revenueRange), [games, revenueSnapshots, revenueRange, realRevenue]);
+  const revenueData = useMemo(() => buildRevenueData(games, revenueSnapshots, revenueRange), [games, revenueSnapshots, revenueRange, realRevenue]);
   const revenueTotal = revenueData.reduce((sum, point) => sum + point.revenue, 0);
   const nicheMetricData = useMemo(() => buildNicheMetricData(niches, games, revenueSnapshots, nicheMetric), [niches, games, revenueSnapshots, nicheMetric, realRevenue]);
   const nicheDonutData = nicheMetricData.some((niche) => niche.value > 0)
@@ -810,7 +750,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
           severity: alert.severity ?? "Medium",
           medal: alert.medal
         }) as AlertItem)
-        .filter((alert) => alert.title !== "🎉 First Revenue CCU!" && alert.medal !== undefined);
+        .filter((alert) => alert.title !== "🎉 First Revenue CCU!" && alert.medal !== undefined && !(alert.body ?? "").endsWith(" tracked."));
       setAlerts(storedAlerts);
       window.localStorage.setItem(alertsStorageKey, JSON.stringify(storedAlerts));
       setFiredMilestones(JSON.parse(window.localStorage.getItem(firedMilestonesStorageKey) ?? "{}") as FiredMilestones);
@@ -942,6 +882,16 @@ export function Dashboard({ data }: { data: DashboardData }) {
     if (!stateLoaded || !universeIdsKey) return;
     let cancelled = false;
 
+    try {
+      const cached = JSON.parse(window.localStorage.getItem(realRevenueCacheKey) ?? "null") as { ids?: string; revenue?: RealRevenue; allTime?: AllTimeRevenue } | null;
+      if (cached?.ids === universeIdsKey && cached.revenue) {
+        setRealRevenue(cached.revenue);
+        setRealAllTime(cached.allTime ?? {});
+      }
+    } catch {
+      // no usable cache
+    }
+
     const loadRealRevenue = async () => {
       try {
         const response = await fetch(`/api/revenue?universeIds=${universeIdsKey}`, { cache: "no-store" });
@@ -952,8 +902,13 @@ export function Dashboard({ data }: { data: DashboardData }) {
         setRealRevenue(result.revenue ?? {});
         setRealAllTime(result.allTime ?? {});
         setRevenueErrors(result.errors ?? {});
+        try {
+          window.localStorage.setItem(realRevenueCacheKey, JSON.stringify({ ids: universeIdsKey, revenue: result.revenue ?? {}, allTime: result.allTime ?? {} }));
+        } catch {
+          // storage full or blocked
+        }
       } catch {
-        // Keep the estimate if Roblox can't be reached.
+        // Keep the last real numbers if Roblox can't be reached.
       }
     };
 
@@ -1133,8 +1088,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
                   <ServerField ccu={totalCcu || 1000} />
                   <div className="mt-5 grid gap-3 sm:grid-cols-3">
                     <MetricRow iconType="players" label="Concurrent Players" value={playersOnline} change="live" />
-                    <MetricRow iconType="visits" label="Total Visits" value={totalVisitsLabel} change={growthPercent(totalVisits || 3)} />
-                    <MetricRow iconType="games" label="Total Games" value={totalGamesLabel} change={growthPercent(games.length || 1)} />
+                    <MetricRow iconType="visits" label="Total Visits" value={totalVisitsLabel} />
+                    <MetricRow iconType="games" label="Total Games" value={totalGamesLabel} />
                   </div>
                 </div>
               </CardContent>
@@ -1198,7 +1153,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
           <div className="mt-3 grid gap-3 xl:grid-cols-[1.05fr_.95fr]">
             <TrendCard
               title="Revenue Over Time"
-              value={<><span>{formatUsd(revenueTotal)}</span><span className="ml-2 text-sm font-semibold text-emerald-400">{growthPercent(revenueTotal || 4)}</span></>}
+              value={<><span>{formatUsd(revenueTotal)}</span><RevenueChange value={revenueChange(games, revenueSnapshots, revenueRange)} /></>}
               color="#73f28f"
               dataKey="revenue"
               data={revenueData}
@@ -1239,7 +1194,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   );
 }
 
-function MetricRow({ iconType, label, value, change }: { iconType: "players" | "visits" | "games"; label: string; value: string; change: string }) {
+function MetricRow({ iconType, label, value, change }: { iconType: "players" | "visits" | "games"; label: string; value: string; change?: string }) {
   return (
     <div className="flex items-center gap-3 rounded-md bg-white/[0.035] p-3">
       <div className="grid h-9 w-9 place-items-center rounded-full bg-black/90">
@@ -1304,7 +1259,8 @@ function revenueRows(games: GameCard[], snapshots: RevenueSnapshots) {
 function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: RevenueSnapshots }) {
   const [chartRange, setChartRange] = useState<RevenueRange>("30d");
   const rows = revenueRows(games, snapshots);
-  const todayKey = dateKey(new Date());
+  const latestDay = latestRealDay();
+  const todayKey = latestDay || dateKey(new Date());
   const today = rows.find((row) => row.key === todayKey)?.revenue ?? 0;
   const currentMonth = todayKey.slice(0, 7);
   const previousMonthDate = new Date(`${todayKey}T00:00:00`);
@@ -1341,8 +1297,8 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
     <div className="space-y-3">
       <p className="text-xs text-slate-400">
         {hasRealRevenue()
-          ? "Real revenue from Roblox (Robux converted at the DevEx rate of $0.0038). Today is still filling in. Entered Creator Rewards are spread over the days in proportion to each day's sales."
-          : "Estimated from visits × ARPDAU. Add your Roblox API key to see real revenue."}
+          ? `Real revenue from Roblox (Robux converted at the DevEx rate of $0.0038). Roblox reports about two days late; the newest day it has is ${latestDay}.`
+          : "Waiting for real revenue from Roblox."}
       </p>
       {sources.length > 0 ? (
         <p className="text-xs text-slate-400">
@@ -1355,7 +1311,7 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
         </p>
       ) : null}
       <div className="grid gap-3 lg:grid-cols-3">
-        <RevenueMetric label="Money made today" value={formatUsd(today)} size="large" />
+        <RevenueMetric label={latestDay ? `Latest day (${latestDay})` : "Latest day"} value={formatUsd(today)} size="large" />
         <RevenueMetric label="This month" value={formatUsd(thisMonth)} size="large" />
         <RevenueMetric label="All time earnings" value={formatUsd(allTime)} size="large" />
       </div>
@@ -1737,7 +1693,7 @@ function GameOverviewCard({ game, rank, onEdit, onDelete, readonly = false }: { 
       </a>
       {rank && rank <= 3 ? <RankBadge rank={rank} /> : null}
       {!readonly ? <div ref={menuRef}>
-        <button type="button" aria-label="Game options" onClick={() => setMenuOpen((open) => !open)} className="absolute right-2 top-2 z-20 grid h-8 w-8 place-items-center rounded-md bg-black/45 text-white opacity-0 backdrop-blur transition hover:bg-black/70 group-hover:opacity-100 data-[open=true]:opacity-100" data-open={menuOpen}>
+        <button type="button" aria-label="Game options" onClick={() => setMenuOpen((open) => !open)} className="absolute right-2 top-2 z-20 grid h-8 w-8 place-items-center rounded-md bg-black/45 text-white backdrop-blur transition hover:bg-black/70" data-open={menuOpen}>
           <MoreVertical className="h-4 w-4" />
         </button>
         {menuOpen ? (
