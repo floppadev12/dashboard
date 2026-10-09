@@ -238,6 +238,43 @@ function formatUsd(value: number) {
   return `$${formatPlainNumber(value)}`;
 }
 
+// ---- Real revenue from the Roblox Analytics API ----------------------------
+// Robux per UTC day, keyed by universe ID. When a game has real data, it replaces
+// the visits × ARPDAU estimate everywhere on the dashboard.
+const ROBUX_TO_USD = 0.0038;
+type RealRevenue = Record<string, Record<string, number>>;
+let realRevenueStore: RealRevenue = {};
+let realRevenueVersion = 0;
+
+function setRealRevenueStore(next: RealRevenue) {
+  if (next === realRevenueStore) return;
+  realRevenueStore = next;
+  realRevenueVersion += 1;
+}
+
+function hasRealRevenue() {
+  return Object.keys(realRevenueStore).length > 0;
+}
+
+function realSeries(game: GameCard) {
+  return game.universeId != null ? realRevenueStore[String(game.universeId)] : undefined;
+}
+
+function dayRevenue(game: GameCard, key: string, snapshots: RevenueSnapshots) {
+  const real = realSeries(game);
+  if (real) return (real[key] ?? 0) * ROBUX_TO_USD;
+  const current = snapshots[key]?.[game.id];
+  const previous = snapshots[previousDateKey(key)]?.[game.id];
+  if (current === undefined || previous === undefined) return 0;
+  return Math.max(0, current - previous) * parseArpdau(game.arpdau) * ROBUX_TO_USD;
+}
+
+function revenueDateKeys(snapshots: RevenueSnapshots) {
+  const keys = new Set(Object.keys(snapshots));
+  Object.values(realRevenueStore).forEach((series) => Object.keys(series).forEach((key) => keys.add(key)));
+  return [...keys].sort();
+}
+
 function growthPercent(seed: number) {
   return `+${(6 + (seed % 13) + ((seed % 7) / 10)).toFixed(1)}%`;
 }
@@ -255,8 +292,8 @@ function dateKey(date: Date) {
 }
 
 function previousDateKey(key: string) {
-  const date = new Date(`${key}T00:00:00`);
-  date.setDate(date.getDate() - 1);
+  const date = new Date(`${key}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - 1);
   return dateKey(date);
 }
 
@@ -285,16 +322,7 @@ function buildRevenueData(games: GameCard[], snapshots: RevenueSnapshots, range:
     const date = new Date(today);
     date.setDate(today.getDate() - (days - 1 - index));
     const key = dateKey(date);
-    const previousKey = previousDateKey(key);
-    const currentSnapshot = snapshots[key] ?? {};
-    const previousSnapshot = snapshots[previousKey] ?? {};
-
-    const revenue = games.reduce((total, game) => {
-      const currentVisits = currentSnapshot[game.id];
-      const previousVisits = previousSnapshot[game.id];
-      if (currentVisits === undefined || previousVisits === undefined) return total;
-      return total + Math.max(0, currentVisits - previousVisits) * parseArpdau(game.arpdau) * 0.0038;
-    }, 0);
+    const revenue = games.reduce((total, game) => total + dayRevenue(game, key, snapshots), 0);
 
     return {
       label: range === "1d" ? "Today" : `${date.getMonth() + 1}/${date.getDate()}/${date.getFullYear()}`,
@@ -314,7 +342,7 @@ function buildOverviewRevenueData(games: GameCard[], snapshots: RevenueSnapshots
     const date = new Date(today);
     date.setDate(today.getDate() - (days - 1 - index));
     const fallbackRevenue = overviewRevenueFallbacks[dateKey(date)];
-    if (point.revenue > 0 || fallbackRevenue === undefined) return point;
+    if (point.revenue > 0 || fallbackRevenue === undefined || hasRealRevenue()) return point;
     return { ...point, revenue: fallbackRevenue };
   });
 }
@@ -359,12 +387,7 @@ function monthRevenueRows(games: GameCard[], snapshots: RevenueSnapshots, monthK
       if (current === undefined || previous === undefined) return total;
       return total + Math.max(0, current - previous);
     }, 0);
-    const revenue = games.reduce((total, game) => {
-      const current = currentSnapshot[game.id];
-      const previous = previousSnapshot[game.id];
-      if (current === undefined || previous === undefined) return total;
-      return total + Math.max(0, current - previous) * parseArpdau(game.arpdau) * 0.0038;
-    }, 0);
+    const revenue = games.reduce((total, game) => total + dayRevenue(game, key, snapshots), 0);
     return { key, label: key.slice(5), revenue, visits };
   });
 }
@@ -396,6 +419,8 @@ function monthReportStats(games: GameCard[], snapshots: RevenueSnapshots, ccuSna
 
 function gameDailyRevenue(game: GameCard, snapshots: RevenueSnapshots) {
   const todayKey = dateKey(new Date());
+  // Real data: use yesterday, the last complete UTC day.
+  if (realSeries(game)) return dayRevenue(game, previousDateKey(todayKey), snapshots);
   const previousKey = previousDateKey(todayKey);
   const currentVisits = snapshots[todayKey]?.[game.id] ?? game.visits;
   const previousVisits = snapshots[previousKey]?.[game.id] ?? game.visits;
@@ -562,6 +587,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [seenAlertCount, setSeenAlertCount] = useState(0);
   const [closedMonths, setClosedMonths] = useState<ClosedMonths>({});
   const [stateLoaded, setStateLoaded] = useState(false);
+  const [realRevenue, setRealRevenue] = useState<RealRevenue>({});
+  setRealRevenueStore(realRevenue);
   const gamesRef = useRef<GameCard[]>([]);
   const notificationRef = useRef<HTMLDivElement | null>(null);
   const searchRef = useRef<HTMLDivElement | null>(null);
@@ -586,9 +613,9 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const playersOnline = totalCcu > 0 ? formatNumber(totalCcu) : data.metrics[0]?.value ?? "0";
   const totalVisitsLabel = totalVisits > 0 ? formatCompact(totalVisits) : "0";
   const totalGamesLabel = formatCompact(games.length);
-  const revenueData = useMemo(() => buildOverviewRevenueData(games, revenueSnapshots, revenueRange), [games, revenueSnapshots, revenueRange]);
+  const revenueData = useMemo(() => buildOverviewRevenueData(games, revenueSnapshots, revenueRange), [games, revenueSnapshots, revenueRange, realRevenue]);
   const revenueTotal = revenueData.reduce((sum, point) => sum + point.revenue, 0);
-  const nicheMetricData = useMemo(() => buildNicheMetricData(niches, games, revenueSnapshots, nicheMetric), [niches, games, revenueSnapshots, nicheMetric]);
+  const nicheMetricData = useMemo(() => buildNicheMetricData(niches, games, revenueSnapshots, nicheMetric), [niches, games, revenueSnapshots, nicheMetric, realRevenue]);
   const nicheDonutData = nicheMetricData.some((niche) => niche.value > 0)
     ? nicheMetricData
     : [{ id: "empty", label: "No data", value: 100, icon: "", color: "#3b3b4a" }];
@@ -835,6 +862,37 @@ export function Dashboard({ data }: { data: DashboardData }) {
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [games.length, stateLoaded]);
+
+  const universeIdsKey = games
+    .map((game) => game.universeId)
+    .filter((id): id is number => typeof id === "number" && id > 0)
+    .sort((a, b) => a - b)
+    .join(",");
+
+  useEffect(() => {
+    if (!stateLoaded || !universeIdsKey) return;
+    let cancelled = false;
+
+    const loadRealRevenue = async () => {
+      try {
+        const response = await fetch(`/api/revenue?universeIds=${universeIdsKey}`, { cache: "no-store" });
+        if (!response.ok) return;
+        const result = (await response.json()) as { configured?: boolean; revenue?: RealRevenue; errors?: Record<string, string> };
+        if (cancelled || !result.configured) return;
+        if (result.errors && Object.keys(result.errors).length) console.warn("Roblox revenue errors:", result.errors);
+        setRealRevenue(result.revenue ?? {});
+      } catch {
+        // Keep the estimate if Roblox can't be reached.
+      }
+    };
+
+    void loadRealRevenue();
+    const interval = window.setInterval(loadRealRevenue, 15 * 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [stateLoaded, universeIdsKey]);
 
   function saveGames(nextGames: GameCard[]) {
     setGames(nextGames);
@@ -1155,12 +1213,7 @@ function gameCreatedDate(game: GameCard) {
 }
 
 function gameRevenueStats(game: GameCard, snapshots: RevenueSnapshots) {
-  const rows = Object.keys(snapshots).sort().map((key) => {
-    const previous = snapshots[previousDateKey(key)]?.[game.id];
-    const current = snapshots[key]?.[game.id];
-    if (previous === undefined || current === undefined) return { key, revenue: 0 };
-    return { key, revenue: Math.max(0, current - previous) * parseArpdau(game.arpdau) * 0.0038 };
-  });
+  const rows = revenueDateKeys(snapshots).map((key) => ({ key, revenue: dayRevenue(game, key, snapshots) }));
   const earningRows = rows.filter((row) => row.revenue > 0);
   const total = earningRows.reduce((sum, row) => sum + row.revenue, 0);
   const highest = earningRows.reduce((best, row) => row.revenue > best.revenue ? row : best, { key: "N/A", revenue: 0 });
@@ -1171,17 +1224,10 @@ function gameRevenueStats(game: GameCard, snapshots: RevenueSnapshots) {
 }
 
 function revenueRows(games: GameCard[], snapshots: RevenueSnapshots) {
-  const keys = Object.keys(snapshots).sort();
-  return keys.map((key) => {
-    const previousKey = previousDateKey(key);
-    const revenue = games.reduce((total, game) => {
-      const current = snapshots[key]?.[game.id];
-      const previous = snapshots[previousKey]?.[game.id];
-      if (current === undefined || previous === undefined) return total;
-      return total + Math.max(0, current - previous) * parseArpdau(game.arpdau) * 0.0038;
-    }, 0);
-    return { key, revenue };
-  });
+  return revenueDateKeys(snapshots).map((key) => ({
+    key,
+    revenue: games.reduce((total, game) => total + dayRevenue(game, key, snapshots), 0)
+  }));
 }
 
 function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: RevenueSnapshots }) {
@@ -1220,6 +1266,11 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
 
   return (
     <div className="space-y-3">
+      <p className="text-xs text-slate-400">
+        {hasRealRevenue()
+          ? "Real revenue from Roblox (Robux converted at the DevEx rate of $0.0038). Today is still filling in."
+          : "Estimated from visits × ARPDAU. Add your Roblox API key to see real revenue."}
+      </p>
       <div className="grid gap-3 lg:grid-cols-3">
         <RevenueMetric label="Money made today" value={formatUsd(today)} size="large" />
         <RevenueMetric label="This month" value={formatUsd(thisMonth)} size="large" />
@@ -1425,7 +1476,8 @@ function MonthlyReportView({
 
 function MonthlyTopNiches({ games, niches, snapshots }: { games: GameCard[]; niches: Niche[]; snapshots: RevenueSnapshots }) {
   const [metric, setMetric] = useState<NicheMetric>("CCU");
-  const data = useMemo(() => buildNicheMetricData(niches, games, snapshots, metric), [games, metric, niches, snapshots]);
+  const revenueVersion = realRevenueVersion;
+  const data = useMemo(() => buildNicheMetricData(niches, games, snapshots, metric), [games, metric, niches, snapshots, revenueVersion]);
   const donutData = data.some((niche) => niche.value > 0)
     ? data
     : [{ id: "empty", label: "No data", value: 100, icon: "", color: "#3b3b4a" }];

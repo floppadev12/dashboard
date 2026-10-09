@@ -10,7 +10,9 @@
     "lint": "next lint",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "vercel-build": "prisma generate && node scripts/db-push-if-configured.mjs && next build",
+    "discord:register": "node scripts/register-discord-commands.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.10.1",
