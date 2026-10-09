@@ -1028,8 +1028,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
       <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[150px_1fr]">
         <aside className="hidden border-r border-white/8 bg-black/20 px-3 py-5 lg:flex lg:flex-col">
           <div className="mb-8 flex flex-col items-center gap-2">
-            <img src="/brand/project-floppa.jpg" alt="" className="h-12 w-12 rounded-md object-cover shadow-glow" />
-            <div className="text-center text-xs font-semibold text-white">Project Floppa</div>
+            <img src="/brand/project-raw.png" alt="" className="h-12 w-12 rounded-md object-cover shadow-glow" />
+            <div className="text-center text-xs font-semibold text-white">Project Raw</div>
           </div>
           <nav className="space-y-2">
             {nav.map(([label, Icon], index) => (

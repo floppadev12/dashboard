@@ -1,4 +1,4 @@
-# GameOps Dashboard (Project Floppa)
+# GameOps Dashboard (Project Raw)
 
 Revenue and operations dashboard for the owner's Roblox games, including
 "+1 Open Sea for Treasure". Repo: github.com/floppadev12/dashboard (PUBLIC).

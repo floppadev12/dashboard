@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
   try {
-    await sendWebhook({ username: "Project Floppa", embeds: [await buildRevenueEmbed(1)] });
+    await sendWebhook({ username: "Project Raw", embeds: [await buildRevenueEmbed(1)] });
     return NextResponse.json({ ok: true });
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
