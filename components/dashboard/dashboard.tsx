@@ -1139,7 +1139,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
               <CardHeader><CardTitle>Games Overview</CardTitle></CardHeader>
               <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                 {visibleGames.map((game) => (
-                  <GameOverviewCard key={game.id} game={game} rank={sortedGames.findIndex((rankedGame) => rankedGame.id === game.id) + 1} onEdit={() => setEditingGame(game)} onDelete={() => deleteGame(game.id)} />
+                  <GameOverviewCard key={game.id} game={game} rank={sortedGames.findIndex((rankedGame) => rankedGame.id === game.id) + 1} onEdit={() => undefined} onDelete={() => undefined} readonly />
                 ))}
               </CardContent>
             </Card>
