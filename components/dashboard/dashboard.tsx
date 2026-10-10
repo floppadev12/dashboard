@@ -64,6 +64,7 @@ const ccuSnapshotsStorageKey = "gameops-dashboard-ccu-snapshots";
 const ccuRecordStorageKey = "gameops-dashboard-ccu-record";
 const firedCcuRecordDatesStorageKey = "gameops-dashboard-fired-ccu-record-dates";
 const closedMonthsStorageKey = "gameops-dashboard-closed-months";
+const creatorRewardsStorageKey = "gameops-dashboard-creator-rewards";
 const playerRanges = ["3h", "12h", "1d", "7d", "14d"] as const;
 const revenueRanges = ["1d", "7d", "30d", "90d", "365d"] as const;
 type PlayerRange = (typeof playerRanges)[number];
@@ -84,6 +85,8 @@ type FiredMilestones = Record<string, number[]>;
 type FiredRevenueAlerts = Record<string, boolean>;
 type FiredCcuRecordDates = Record<string, boolean>;
 type ClosedMonths = Record<string, boolean>;
+/** Creator Rewards the owner typed in: game id → UTC day → Robux. */
+type RewardEntries = Record<string, Record<string, number>>;
 type RenderAlert = AlertItem | DashboardData["alerts"][number];
 type PersistedState = {
   [gamesStorageKey]?: Array<Partial<GameCard> & { onlineCount?: string }>;
@@ -96,6 +99,7 @@ type PersistedState = {
   [ccuRecordStorageKey]?: number;
   [firedCcuRecordDatesStorageKey]?: FiredCcuRecordDates;
   [closedMonthsStorageKey]?: ClosedMonths;
+  [creatorRewardsStorageKey]?: RewardEntries;
 };
 const milestones = [
   { value: 1000, label: "1K", medal: "bronze", icon: "/medals/bronze.png" },
@@ -268,6 +272,72 @@ function gameAllTimeRevenue(game: GameCard, snapshots: RevenueSnapshots) {
   const daily = revenueDateKeys(snapshots).reduce((sum, key) => sum + dayRevenue(game, key, snapshots), 0);
   const real = game.universeId != null ? realAllTimeStore[String(game.universeId)] : undefined;
   return (real ? Math.max(real.total * ROBUX_TO_USD, daily) : daily) + (game.creatorRewards ?? 0) * ROBUX_TO_USD;
+}
+
+// ---- Creator Rewards ---------------------------------------------------------
+// Roblox has no API for Creator Rewards, so the owner enters real amounts for some days.
+// From those the dashboard learns "rewards as a share of that day's real sales" and uses
+// it to estimate the days that were not entered. Entered days are always shown exactly.
+let rewardEntriesStore: RewardEntries = {};
+let rewardGamesStore: GameCard[] = [];
+const REWARD_SAMPLE_DAYS = 14;
+
+function dayNumber(key: string) {
+  return Date.parse(`${key}T00:00:00Z`) / 86_400_000;
+}
+
+/** Share of sales learned from the entered days closest to `day`: this game's own, else all games'. */
+function rewardRate(game: GameCard, day: string) {
+  const learn = (games: GameCard[]) => {
+    const samples: { day: string; robux: number; sales: number }[] = [];
+    games.forEach((current) => {
+      const real = realSeries(current);
+      Object.entries(rewardEntriesStore[current.id] ?? {}).forEach(([entered, robux]) => {
+        const sales = real?.[entered] ?? 0;
+        if (sales > 0) samples.push({ day: entered, robux, sales });
+      });
+    });
+    if (samples.length === 0) return undefined;
+    const at = dayNumber(day);
+    const nearest = samples.sort((a, b) => Math.abs(dayNumber(a.day) - at) - Math.abs(dayNumber(b.day) - at)).slice(0, REWARD_SAMPLE_DAYS);
+    const sales = nearest.reduce((sum, sample) => sum + sample.sales, 0);
+    return { rate: nearest.reduce((sum, sample) => sum + sample.robux, 0) / sales, samples: nearest.length };
+  };
+  const own = learn([game]);
+  if (own) return { ...own, own: true };
+  const shared = learn(rewardGamesStore);
+  return shared ? { ...shared, own: false } : undefined;
+}
+
+/** Creator Rewards in USD for one game and day: the entered amount, or an estimate. */
+function dayRewards(game: GameCard, day: string) {
+  const entered = rewardEntriesStore[game.id]?.[day];
+  if (entered !== undefined) return { usd: entered * ROBUX_TO_USD, estimated: false };
+  const sales = realSeries(game)?.[day] ?? 0;
+  const learned = sales > 0 ? rewardRate(game, day) : undefined;
+  return { usd: learned ? sales * learned.rate * ROBUX_TO_USD : 0, estimated: true };
+}
+
+/** The newest `count` days Roblox has reported, newest first. */
+function latestDays(count: number) {
+  const days: string[] = [];
+  for (let day = latestRealDay(); day && days.length < count; day = previousDateKey(day)) days.push(day);
+  return days;
+}
+
+function rewardsOver(games: GameCard[], days: string[]) {
+  let usd = 0;
+  let enteredDays = 0;
+  games.forEach((game) => days.forEach((day) => {
+    const rewards = dayRewards(game, day);
+    usd += rewards.usd;
+    if (!rewards.estimated) enteredDays += 1;
+  }));
+  return { usd, exact: games.length > 0 && enteredDays === games.length * days.length };
+}
+
+function hasRewardEntries() {
+  return Object.values(rewardEntriesStore).some((days) => Object.keys(days).length > 0);
 }
 
 // "430k" → 430000, "1.8M" → 1800000
@@ -591,6 +661,9 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editingGame, setEditingGame] = useState<GameCard | null>(null);
   const [openGameId, setOpenGameId] = useState<string | null>(null);
+  const [rewardEntries, setRewardEntries] = useState<RewardEntries>({});
+  rewardEntriesStore = rewardEntries;
+  rewardGamesStore = games;
   const [editingNiche, setEditingNiche] = useState<Niche | null>(null);
   const [isNicheOpen, setIsNicheOpen] = useState(false);
   const [playerRange, setPlayerRange] = useState<PlayerRange>("3h");
@@ -664,7 +737,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
       [firedRevenueAlertsStorageKey]: readStoredJson(firedRevenueAlertsStorageKey, {}),
       [ccuRecordStorageKey]: Number(window.localStorage.getItem(ccuRecordStorageKey) ?? "0"),
       [firedCcuRecordDatesStorageKey]: readStoredJson(firedCcuRecordDatesStorageKey, {}),
-      [closedMonthsStorageKey]: readStoredJson(closedMonthsStorageKey, {})
+      [closedMonthsStorageKey]: readStoredJson(closedMonthsStorageKey, {}),
+      [creatorRewardsStorageKey]: readStoredJson(creatorRewardsStorageKey, {})
     };
 
     async function loadState() {
@@ -696,6 +770,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
       setCcuRecord(Number(selectedState[ccuRecordStorageKey] ?? 0));
       setFiredCcuRecordDates(selectedState[firedCcuRecordDatesStorageKey] ?? {});
       setClosedMonths(selectedState[closedMonthsStorageKey] ?? {});
+      setRewardEntries(sharedState[creatorRewardsStorageKey] ?? localState[creatorRewardsStorageKey] ?? {});
       setStateLoaded(true);
 
       if (!hasSharedState(sharedState) && hasSharedState(localState)) {
@@ -1005,6 +1080,13 @@ export function Dashboard({ data }: { data: DashboardData }) {
     saveNiches(niches.filter((niche) => niche.id !== nicheId));
   }
 
+  function saveGameRewards(gameId: string, days: Record<string, number>) {
+    const next = { ...rewardEntries, [gameId]: days };
+    setRewardEntries(next);
+    writeLocalState({ [creatorRewardsStorageKey]: next });
+    void writeRemoteState({ [creatorRewardsStorageKey]: next });
+  }
+
   function closeMonth(monthKey: MonthKey) {
     const nextClosedMonths = { ...closedMonths, [monthKey]: true };
     const monthLabel = monthlyPages.find((month) => month.key === monthKey)?.label ?? monthKey;
@@ -1109,6 +1191,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
               snapshots={revenueSnapshots}
               onBack={() => setOpenGameId(null)}
               onEdit={(game) => setEditingGame(game)}
+              rewardDays={rewardEntries[openGameId ?? ""] ?? {}}
+              onSaveRewards={saveGameRewards}
             />
           ) : activeView === "Games" ? (
             <GamesView
@@ -1336,6 +1420,8 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
   const previousMonthEarnings = previousMonthRows.reduce((sum, row) => sum + row.revenue, 0);
   const allTime = games.reduce((sum, game) => sum + gameAllTimeRevenue(game, snapshots), 0);
   const sources = allTimeSources(games);
+  const rewards30 = rewardsOver(games, latestDays(30));
+  const sales30 = buildRevenueData(games, snapshots, "30d").reduce((sum, point) => sum + point.revenue, 0);
   const failedGames = games.filter((game) => game.universeId != null && realRevenueErrors[String(game.universeId)]);
   const highestDay = rows.reduce((best, row) => row.revenue > best.revenue ? row : best, { key: "N/A", revenue: 0 });
   const avgDay = rows.length ? rows.reduce((sum, row) => sum + row.revenue, 0) / rows.length : 0;
@@ -1379,6 +1465,15 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
         <RevenueMetric label="This month" value={formatUsd(thisMonth)} size="large" />
         <RevenueMetric label="All time earnings" value={formatUsd(allTime)} size="large" />
       </div>
+      {hasRewardEntries() ? (
+        <div className="grid gap-3 lg:grid-cols-3">
+          <RevenueMetric label={`Creator Rewards, last 30 days${rewards30.exact ? "" : " (estimated)"}`} value={formatUsd(rewards30.usd)} />
+          <RevenueMetric label="Sales + Creator Rewards, last 30 days" value={formatUsd(sales30 + rewards30.usd)} />
+          <RevenueMetric label={`Sales + Creator Rewards, ${latestDay || "latest day"}`} value={formatUsd(today + rewardsOver(games, latestDays(1)).usd)} />
+        </div>
+      ) : (
+        <p className="text-xs text-slate-400">Creator Rewards are not counted yet. Open a game on the Games page and enter a few days of rewards to start tracking them.</p>
+      )}
       <div className="grid gap-3 xl:grid-cols-[1.15fr_.85fr]">
         <TrendCard
           title="Revenue"
@@ -1727,7 +1822,60 @@ function StatTile({ label, value, hint }: { label: string; value: ReactNode; hin
   );
 }
 
-function GameDetailView({ game, games, niches, snapshots, onBack, onEdit }: { game: GameCard; games: GameCard[]; niches: Niche[]; snapshots: RevenueSnapshots; onBack: () => void; onEdit: (game: GameCard) => void }) {
+function CreatorRewardsDialog({ game, days, onClose, onSave }: { game: GameCard; days: Record<string, number>; onClose: () => void; onSave: (days: Record<string, number>) => void }) {
+  const [newest, setNewest] = useState(latestRealDay() || dateKey(new Date()));
+  const [text, setText] = useState("");
+  const amounts = text
+    .split("\n")
+    .map((line) => line.trim().split(" ").filter(Boolean).pop() ?? "")
+    .filter((token) => token !== "" && token[0] >= "0" && token[0] <= "9")
+    .map(parseRobux);
+  const parsed: Record<string, number> = {};
+  let day = newest;
+  amounts.forEach((robux) => {
+    parsed[day] = robux;
+    day = previousDateKey(day);
+  });
+  const parsedDays = Object.keys(parsed).sort();
+  const savedDays = Object.keys(days).sort();
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/70 px-4 backdrop-blur-sm">
+      <div className="glass-panel w-full max-w-md rounded-lg p-5">
+        <div className="mb-5 flex items-center justify-between">
+          <h2 className="text-base font-semibold">Creator Rewards · {game.title}</h2>
+          <button type="button" onClick={onClose} className="grid h-8 w-8 place-items-center rounded-md text-slate-400 hover:bg-white/5 hover:text-white">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <label className="mb-4 block">
+          <span className="mb-2 block text-xs font-medium text-slate-300">Newest day in your list</span>
+          <input type="date" value={newest} onChange={(event) => setNewest(event.target.value)} className="h-10 w-full rounded-md border border-white/10 bg-white/[0.04] px-3 text-sm outline-none transition focus:border-purple-400" />
+        </label>
+        <label className="mb-3 block">
+          <span className="mb-2 block text-xs font-medium text-slate-300">Robux per day, one per line, newest first</span>
+          <textarea value={text} onChange={(event) => setText(event.target.value)} rows={8} placeholder={"2850\n5170\n3745"} className="w-full rounded-md border border-white/10 bg-white/[0.04] px-3 py-2 text-sm outline-none transition focus:border-purple-400" />
+        </label>
+        <p className="mb-4 text-xs text-slate-400">
+          {parsedDays.length === 0
+            ? `${savedDays.length} day${savedDays.length === 1 ? "" : "s"} saved so far${savedDays.length ? ` (${savedDays[0]} to ${savedDays[savedDays.length - 1]})` : ""}.`
+            : `${parsedDays.length} day${parsedDays.length === 1 ? "" : "s"}: ${parsedDays[0]} to ${parsedDays[parsedDays.length - 1]}, ${formatNumber(amounts.reduce((sum, robux) => sum + robux, 0))} Robux in total.`}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button type="button" disabled={parsedDays.length === 0} onClick={() => { onSave({ ...days, ...parsed }); onClose(); }}>Save days</Button>
+          {savedDays.length > 0 ? (
+            <button type="button" onClick={() => { if (window.confirm(`Remove all ${savedDays.length} saved Creator Rewards days for ${game.title}?`)) { onSave({}); onClose(); } }} className="ml-auto rounded-md px-3 py-2 text-xs font-semibold text-red-300 hover:bg-red-500/10">
+              Remove saved days
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function GameDetailView({ game, games, niches, snapshots, onBack, onEdit, rewardDays, onSaveRewards }: { game: GameCard; games: GameCard[]; niches: Niche[]; snapshots: RevenueSnapshots; onBack: () => void; onEdit: (game: GameCard) => void; rewardDays: Record<string, number>; onSaveRewards: (gameId: string, days: Record<string, number>) => void }) {
+  const [rewardsOpen, setRewardsOpen] = useState(false);
   const [playerRange, setPlayerRange] = useState<PlayerRange>("1d");
   const [revenueRange, setRevenueRange] = useState<RevenueRange>("30d");
   const [history, setHistory] = useState<CcuHistory | undefined>(undefined);
@@ -1788,6 +1936,11 @@ function GameDetailView({ game, games, niches, snapshots, onBack, onEdit }: { ga
   const all30 = sumRange(games, "30d");
   const allTime = gameAllTimeRevenue(game, snapshots);
   const revenueStats = gameRevenueStats(game, snapshots);
+  const rewardsLatest = rewardsOver(one, latestDays(1));
+  const rewards7 = rewardsOver(one, latestDays(7));
+  const rewards30 = rewardsOver(one, latestDays(30));
+  const learned = latestDay ? rewardRate(game, latestDay) : undefined;
+  const enteredCount = Object.keys(rewardDays).length;
   const revenueChart = buildRevenueData(one, snapshots, revenueRange);
   const revenueChartTotal = revenueChart.reduce((sum, point) => sum + point.revenue, 0);
   const playerChart = buildCcuChartData([], game.ccu, playerRange, history);
@@ -1846,6 +1999,26 @@ function GameDetailView({ game, games, niches, snapshots, onBack, onEdit }: { ga
         <StatTile label="Last 30 days" value={<><span>{formatUsd(last30)}</span><RevenueChange value={revenueChange(one, snapshots, "30d")} /></>} hint={all30 > 0 ? `${Math.round((last30 / all30) * 100)}% of all games` : undefined} />
         <StatTile label="All time earnings" value={formatUsd(allTime)} hint={revenueStats.highest.key === "N/A" ? undefined : `Best day ${revenueStats.highest.key} · ${formatUsd(revenueStats.highest.revenue)}`} />
       </div>
+
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="min-w-0 flex-1 text-xs text-slate-400">
+          {!learned
+            ? "Creator Rewards: Roblox has no API for them. Enter the real amounts for a few days and the dashboard learns to estimate the rest."
+            : `Creator Rewards: ${enteredCount} day${enteredCount === 1 ? "" : "s"} entered. Learned rate: ${(learned.rate * 100).toFixed(1)}% of sales${learned.own ? "" : " (from your other games)"}. Entered days are exact, the others are estimated.`}
+        </p>
+        <button type="button" onClick={() => setRewardsOpen(true)} className="flex items-center gap-2 rounded-md bg-white/[0.05] px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/10">
+          <Plus className="h-3.5 w-3.5" /> Enter Creator Rewards
+        </button>
+      </div>
+      {learned ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatTile label={`Creator Rewards on ${latestDay}`} value={formatUsd(rewardsLatest.usd)} hint={rewardsLatest.exact ? "Entered by you" : "Estimated"} />
+          <StatTile label="Creator Rewards, last 7 days" value={formatUsd(rewards7.usd)} hint={rewards7.exact ? "Entered by you" : "Partly or fully estimated"} />
+          <StatTile label="Creator Rewards, last 30 days" value={formatUsd(rewards30.usd)} hint={rewards30.exact ? "Entered by you" : "Partly or fully estimated"} />
+          <StatTile label="Sales + rewards, last 30 days" value={formatUsd(last30 + rewards30.usd)} hint={`Sales ${formatUsd(last30)}`} />
+        </div>
+      ) : null}
+      {rewardsOpen ? <CreatorRewardsDialog game={game} days={rewardDays} onClose={() => setRewardsOpen(false)} onSave={(days) => onSaveRewards(game.id, days)} /> : null}
 
       <div className="grid gap-3 xl:grid-cols-2">
         <TrendCard
