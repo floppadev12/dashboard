@@ -31,6 +31,7 @@ import {
   Zap
 } from "lucide-react";
 import type { ChartPoint, DashboardData, GameCard, Niche } from "@/lib/types";
+import { creatorRewardsStateKey, dayRewardsRobux, rewardRate as learnRewardRate, type RewardEntries } from "@/lib/creator-rewards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -64,7 +65,7 @@ const ccuSnapshotsStorageKey = "gameops-dashboard-ccu-snapshots";
 const ccuRecordStorageKey = "gameops-dashboard-ccu-record";
 const firedCcuRecordDatesStorageKey = "gameops-dashboard-fired-ccu-record-dates";
 const closedMonthsStorageKey = "gameops-dashboard-closed-months";
-const creatorRewardsStorageKey = "gameops-dashboard-creator-rewards";
+const creatorRewardsStorageKey = creatorRewardsStateKey;
 const playerRanges = ["3h", "12h", "1d", "7d", "14d"] as const;
 const revenueRanges = ["1d", "7d", "30d", "90d", "365d"] as const;
 type PlayerRange = (typeof playerRanges)[number];
@@ -85,8 +86,6 @@ type FiredMilestones = Record<string, number[]>;
 type FiredRevenueAlerts = Record<string, boolean>;
 type FiredCcuRecordDates = Record<string, boolean>;
 type ClosedMonths = Record<string, boolean>;
-/** Creator Rewards the owner typed in: game id → UTC day → Robux. */
-type RewardEntries = Record<string, Record<string, number>>;
 type RenderAlert = AlertItem | DashboardData["alerts"][number];
 type PersistedState = {
   [gamesStorageKey]?: Array<Partial<GameCard> & { onlineCount?: string }>;
@@ -288,42 +287,20 @@ function gameAllTimeRevenue(game: GameCard, snapshots: RevenueSnapshots) {
 // it to estimate the days that were not entered. Entered days are always shown exactly.
 let rewardEntriesStore: RewardEntries = {};
 let rewardGamesStore: GameCard[] = [];
-const REWARD_SAMPLE_DAYS = 14;
-
-function dayNumber(key: string) {
-  return Date.parse(`${key}T00:00:00Z`) / 86_400_000;
-}
+const rewardSalesOf = (gameId: string) => {
+  const game = rewardGamesStore.find((current) => current.id === gameId);
+  return game ? realSeries(game) : undefined;
+};
 
 /** Share of sales learned from the entered days closest to `day`: this game's own, else all games'. */
 function rewardRate(game: GameCard, day: string) {
-  const learn = (games: GameCard[]) => {
-    const samples: { day: string; robux: number; sales: number }[] = [];
-    games.forEach((current) => {
-      const real = realSeries(current);
-      Object.entries(rewardEntriesStore[current.id] ?? {}).forEach(([entered, robux]) => {
-        const sales = real?.[entered] ?? 0;
-        if (sales > 0) samples.push({ day: entered, robux, sales });
-      });
-    });
-    if (samples.length === 0) return undefined;
-    const at = dayNumber(day);
-    const nearest = samples.sort((a, b) => Math.abs(dayNumber(a.day) - at) - Math.abs(dayNumber(b.day) - at)).slice(0, REWARD_SAMPLE_DAYS);
-    const sales = nearest.reduce((sum, sample) => sum + sample.sales, 0);
-    return { rate: nearest.reduce((sum, sample) => sum + sample.robux, 0) / sales, samples: nearest.length };
-  };
-  const own = learn([game]);
-  if (own) return { ...own, own: true };
-  const shared = learn(rewardGamesStore);
-  return shared ? { ...shared, own: false } : undefined;
+  return learnRewardRate(rewardEntriesStore, rewardSalesOf, rewardGamesStore.map((current) => current.id), game.id, day);
 }
 
 /** Creator Rewards in USD for one game and day: the entered amount, or an estimate. */
 function dayRewards(game: GameCard, day: string) {
-  const entered = rewardEntriesStore[game.id]?.[day];
-  if (entered !== undefined) return { usd: entered * ROBUX_TO_USD, estimated: false };
-  const sales = realSeries(game)?.[day] ?? 0;
-  const learned = sales > 0 ? rewardRate(game, day) : undefined;
-  return { usd: learned ? sales * learned.rate * ROBUX_TO_USD : 0, estimated: true };
+  const rewards = dayRewardsRobux(rewardEntriesStore, rewardSalesOf, rewardGamesStore.map((current) => current.id), game.id, day);
+  return { usd: rewards.robux * ROBUX_TO_USD, estimated: rewards.estimated };
 }
 
 /** The newest `count` days Roblox has reported, newest first. */
@@ -1229,7 +1206,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
             <Card>
               <CardHeader><CardTitle>Games Overview</CardTitle></CardHeader>
               <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {visibleGames.map((game) => (
+                {visibleGames.slice(0, 6).map((game) => (
                   <GameOverviewCard key={game.id} game={game} rank={sortedGames.findIndex((rankedGame) => rankedGame.id === game.id) + 1} onEdit={() => undefined} onDelete={() => undefined} readonly />
                 ))}
               </CardContent>

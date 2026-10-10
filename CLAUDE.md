@@ -34,8 +34,14 @@ Prisma 6 + PostgreSQL (optional). Hosted on Railway (project `humorous-dream`, s
 ## Other additions
 - `middleware.ts`: Basic-auth password (`DASHBOARD_PASSWORD`) for everything except
   `/api/discord` and `/api/cron`.
-- `/api/cron/daily-report` + `vercel.json` cron (07:00 UTC): posts yesterday's revenue
-  embed to `DISCORD_WEBHOOK_URL`. Protected by `CRON_SECRET`.
+- Daily Discord report: `lib/daily-report-timer.ts`, started from `instrumentation.ts`, checks
+  every 30 min and posts once per new day Roblox reports (about 2 days behind) to
+  `DISCORD_WEBHOOK_URL`. Last posted day is kept in `AppState`. `/api/cron/daily-report`
+  (Bearer `CRON_SECRET`) posts it again on demand.
+- Creator Rewards: no Roblox API. Real days are saved in `AppState` key
+  `gameops-dashboard-creator-rewards` (game id → day → Robux; never commit them, the repo is
+  public). `lib/creator-rewards.ts` learns rewards as a share of sales from the nearest 14
+  entered days and estimates other days. Revenue everywhere = sales + Creator Rewards.
 - `/api/discord`: `/revenue` slash command (Ed25519 signature check, only
   `DISCORD_ALLOWED_USER_IDS`, ephemeral replies, deferred via `after()`).
   Register with `npm run discord:register`.
@@ -52,5 +58,4 @@ Prisma 6 + PostgreSQL (optional). Hosted on Railway (project `humorous-dream`, s
 ## Status
 The real-revenue / Discord / password version builds cleanly (`npm run build`, no
 TypeScript errors). In production the dashboard returns 503 until `DASHBOARD_PASSWORD`
-is set on Railway. `vercel.json` cron does not run on Railway, so the daily Discord
-report has no timer yet.
+is set on Railway.
