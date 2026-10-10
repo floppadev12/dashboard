@@ -247,9 +247,14 @@ function realSeries(game: GameCard) {
   return game.universeId != null ? realRevenueStore[String(game.universeId)] : undefined;
 }
 
-// Only real Roblox numbers: a day without real data counts as 0, never an estimate.
-function dayRevenue(game: GameCard, key: string, _snapshots: RevenueSnapshots) {
+// Real sales from Roblox for one day, in USD. A day without real data counts as 0.
+function daySales(game: GameCard, key: string) {
   return (realSeries(game)?.[key] ?? 0) * ROBUX_TO_USD;
+}
+
+// Revenue for one day: real sales plus Creator Rewards (the entered amount, or the learned estimate).
+function dayRevenue(game: GameCard, key: string, _snapshots: RevenueSnapshots) {
+  return daySales(game, key) + dayRewards(game, key).usd;
 }
 
 // Roblox reports revenue about two days late. This is the newest day it has reported.
@@ -269,9 +274,12 @@ function gameDailyRevenue(game: GameCard, snapshots: RevenueSnapshots) {
 }
 
 function gameAllTimeRevenue(game: GameCard, snapshots: RevenueSnapshots) {
-  const daily = revenueDateKeys(snapshots).reduce((sum, key) => sum + dayRevenue(game, key, snapshots), 0);
+  const days = revenueDateKeys(snapshots);
+  const sales = days.reduce((sum, key) => sum + daySales(game, key), 0);
   const real = game.universeId != null ? realAllTimeStore[String(game.universeId)] : undefined;
-  return (real ? Math.max(real.total * ROBUX_TO_USD, daily) : daily) + (game.creatorRewards ?? 0) * ROBUX_TO_USD;
+  // An all-time Creator Rewards total typed into the game wins over the day-by-day estimate.
+  const rewards = game.creatorRewards ? game.creatorRewards * ROBUX_TO_USD : days.reduce((sum, key) => sum + dayRewards(game, key).usd, 0);
+  return (real ? Math.max(real.total * ROBUX_TO_USD, sales) : sales) + rewards;
 }
 
 // ---- Creator Rewards ---------------------------------------------------------
@@ -1421,7 +1429,7 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
   const allTime = games.reduce((sum, game) => sum + gameAllTimeRevenue(game, snapshots), 0);
   const sources = allTimeSources(games);
   const rewards30 = rewardsOver(games, latestDays(30));
-  const sales30 = buildRevenueData(games, snapshots, "30d").reduce((sum, point) => sum + point.revenue, 0);
+  const sales30 = games.reduce((sum, game) => sum + latestDays(30).reduce((total, day) => total + daySales(game, day), 0), 0);
   const failedGames = games.filter((game) => game.universeId != null && realRevenueErrors[String(game.universeId)]);
   const highestDay = rows.reduce((best, row) => row.revenue > best.revenue ? row : best, { key: "N/A", revenue: 0 });
   const avgDay = rows.length ? rows.reduce((sum, row) => sum + row.revenue, 0) / rows.length : 0;
@@ -1447,7 +1455,7 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
     <div className="space-y-3">
       <p className="text-xs text-slate-400">
         {hasRealRevenue()
-          ? `Real revenue from Roblox (Robux converted at the DevEx rate of $0.0038). Roblox reports about two days late; the newest day it has is ${latestDay}.`
+          ? `Revenue is real sales from Roblox plus Creator Rewards (Robux converted at the DevEx rate of $0.0038). Roblox reports about two days late; the newest day it has is ${latestDay}.`
           : "Waiting for real revenue from Roblox."}
       </p>
       {sources.length > 0 ? (
@@ -1468,8 +1476,8 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
       {hasRewardEntries() ? (
         <div className="grid gap-3 lg:grid-cols-3">
           <RevenueMetric label={`Creator Rewards, last 30 days${rewards30.exact ? "" : " (estimated)"}`} value={formatUsd(rewards30.usd)} />
+          <RevenueMetric label="Sales only, last 30 days" value={formatUsd(sales30)} />
           <RevenueMetric label="Sales + Creator Rewards, last 30 days" value={formatUsd(sales30 + rewards30.usd)} />
-          <RevenueMetric label={`Sales + Creator Rewards, ${latestDay || "latest day"}`} value={formatUsd(today + rewardsOver(games, latestDays(1)).usd)} />
         </div>
       ) : (
         <p className="text-xs text-slate-400">Creator Rewards are not counted yet. Open a game on the Games page and enter a few days of rewards to start tracking them.</p>
@@ -1939,6 +1947,7 @@ function GameDetailView({ game, games, niches, snapshots, onBack, onEdit, reward
   const rewardsLatest = rewardsOver(one, latestDays(1));
   const rewards7 = rewardsOver(one, latestDays(7));
   const rewards30 = rewardsOver(one, latestDays(30));
+  const salesOnly30 = latestDays(30).reduce((sum, day) => sum + daySales(game, day), 0);
   const learned = latestDay ? rewardRate(game, latestDay) : undefined;
   const enteredCount = Object.keys(rewardDays).length;
   const revenueChart = buildRevenueData(one, snapshots, revenueRange);
@@ -2004,7 +2013,7 @@ function GameDetailView({ game, games, niches, snapshots, onBack, onEdit, reward
         <p className="min-w-0 flex-1 text-xs text-slate-400">
           {!learned
             ? "Creator Rewards: Roblox has no API for them. Enter the real amounts for a few days and the dashboard learns to estimate the rest."
-            : `Creator Rewards: ${enteredCount} day${enteredCount === 1 ? "" : "s"} entered. Learned rate: ${(learned.rate * 100).toFixed(1)}% of sales${learned.own ? "" : " (from your other games)"}. Entered days are exact, the others are estimated.`}
+            : `Creator Rewards: ${enteredCount} day${enteredCount === 1 ? "" : "s"} entered. Learned rate: ${(learned.rate * 100).toFixed(1)}% of sales${learned.own ? "" : " (from your other games)"}. Entered days are exact, the others are estimated. Revenue on this page includes them.`}
         </p>
         <button type="button" onClick={() => setRewardsOpen(true)} className="flex items-center gap-2 rounded-md bg-white/[0.05] px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-white/10">
           <Plus className="h-3.5 w-3.5" /> Enter Creator Rewards
@@ -2015,7 +2024,7 @@ function GameDetailView({ game, games, niches, snapshots, onBack, onEdit, reward
           <StatTile label={`Creator Rewards on ${latestDay}`} value={formatUsd(rewardsLatest.usd)} hint={rewardsLatest.exact ? "Entered by you" : "Estimated"} />
           <StatTile label="Creator Rewards, last 7 days" value={formatUsd(rewards7.usd)} hint={rewards7.exact ? "Entered by you" : "Partly or fully estimated"} />
           <StatTile label="Creator Rewards, last 30 days" value={formatUsd(rewards30.usd)} hint={rewards30.exact ? "Entered by you" : "Partly or fully estimated"} />
-          <StatTile label="Sales + rewards, last 30 days" value={formatUsd(last30 + rewards30.usd)} hint={`Sales ${formatUsd(last30)}`} />
+          <StatTile label="Sales only, last 30 days" value={formatUsd(salesOnly30)} hint="Real, from Roblox" />
         </div>
       ) : null}
       {rewardsOpen ? <CreatorRewardsDialog game={game} days={rewardDays} onClose={() => setRewardsOpen(false)} onSave={(days) => onSaveRewards(game.id, days)} /> : null}
