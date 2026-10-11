@@ -154,9 +154,39 @@ function readStoredJson<T>(key: string, fallback: T): T {
 
 function writeLocalState(state: Partial<PersistedState>) {
   Object.entries(state).forEach(([key, value]) => {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      // Browser storage is full (big thumbnails). The database copy is still saved.
+    }
   });
 }
+
+/** Shrinks an uploaded picture so games stay small enough to save. Returns the original if it can't. */
+function shrinkImage(dataUrl: string, maxSize: number): Promise<string> {
+  return new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      try {
+        const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(image.width * scale));
+        canvas.height = Math.max(1, Math.round(image.height * scale));
+        const context = canvas.getContext("2d");
+        if (!context) return resolve(dataUrl);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const shrunk = canvas.toDataURL("image/jpeg", 0.85);
+        resolve(shrunk.length < dataUrl.length ? shrunk : dataUrl);
+      } catch {
+        resolve(dataUrl);
+      }
+    };
+    image.onerror = () => resolve(dataUrl);
+    image.src = dataUrl;
+  });
+}
+const THUMBNAIL_SIZE = 720;
+const BIG_THUMBNAIL_CHARS = 300_000;
 
 async function writeRemoteState(state: Partial<PersistedState>) {
   try {
@@ -921,7 +951,9 @@ export function Dashboard({ data }: { data: DashboardData }) {
     const refresh = async () => {
       const currentGames = gamesRef.current;
       if (currentGames.length === 0) return;
-      const refreshed = await Promise.all(
+      type Live = { ccu?: number; visits?: number; universeId?: number; groupName?: string; createdAt?: string };
+      const liveById = new Map<string, { link: string; live: Live }>();
+      await Promise.all(
         currentGames.map(async (game) => {
           try {
             const response = await fetch("/api/roblox", {
@@ -929,22 +961,26 @@ export function Dashboard({ data }: { data: DashboardData }) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ link: game.link })
             });
-            if (!response.ok) return game;
-            const live = (await response.json()) as { ccu?: number; visits?: number; universeId?: number; groupName?: string; createdAt?: string };
-            return {
-              ...game,
-              ccu: live.ccu ?? game.ccu,
-              visits: live.visits ?? game.visits,
-              groupName: live.groupName ?? game.groupName,
-              createdAt: live.createdAt ?? game.createdAt,
-              universeId: live.universeId ?? game.universeId
-            };
+            if (response.ok) liveById.set(game.id, { link: game.link, live: (await response.json()) as Live });
           } catch {
-            return game;
+            // keep the last known numbers for this game
           }
         })
       );
-      saveGames(refreshed);
+      // Apply the fresh numbers to the list as it is now, so a game added, edited or
+      // deleted while Roblox was answering is not undone.
+      saveGames(gamesRef.current.map((game) => {
+        const fresh = liveById.get(game.id);
+        if (!fresh || fresh.link !== game.link) return game;
+        return {
+          ...game,
+          ccu: fresh.live.ccu ?? game.ccu,
+          visits: fresh.live.visits ?? game.visits,
+          groupName: fresh.live.groupName ?? game.groupName,
+          createdAt: fresh.live.createdAt ?? game.createdAt,
+          universeId: fresh.live.universeId ?? game.universeId
+        };
+      }));
     };
 
     void refresh();
@@ -952,6 +988,26 @@ export function Dashboard({ data }: { data: DashboardData }) {
     return () => window.clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [games.length, stateLoaded]);
+
+  useEffect(() => {
+    if (!stateLoaded) return;
+    const big = gamesRef.current.filter((game) => game.thumbnail.startsWith("data:") && game.thumbnail.length > BIG_THUMBNAIL_CHARS);
+    if (big.length === 0) return;
+    let cancelled = false;
+    void Promise.all(big.map(async (game) => [game.id, await shrinkImage(game.thumbnail, THUMBNAIL_SIZE)] as const)).then((shrunk) => {
+      if (cancelled) return;
+      const byId = new Map(shrunk);
+      const next = gamesRef.current.map((game) => {
+        const thumbnail = byId.get(game.id);
+        return thumbnail && thumbnail.length < game.thumbnail.length ? { ...game, thumbnail } : game;
+      });
+      if (next.some((game, index) => game !== gamesRef.current[index])) saveGames(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateLoaded, games.length]);
 
   const universeIdsKey = games
     .map((game) => game.universeId)
@@ -1027,6 +1083,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   }, [stateLoaded, universeIdsKey]);
 
   function saveGames(nextGames: GameCard[]) {
+    gamesRef.current = nextGames;
     setGames(nextGames);
     writeLocalState({ [gamesStorageKey]: nextGames });
     void writeRemoteState({ [gamesStorageKey]: nextGames });
@@ -2237,8 +2294,10 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
     }
     const reader = new FileReader();
     reader.onload = () => {
-      setThumbnail(String(reader.result));
-      setError("");
+      void shrinkImage(String(reader.result), THUMBNAIL_SIZE).then((image) => {
+        setThumbnail(image);
+        setError("");
+      });
     };
     reader.readAsDataURL(file);
   }
