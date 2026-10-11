@@ -521,10 +521,12 @@ function RevenueChange({ value }: { value: number | null }) {
 }
 
 function buildNicheMetricData(niches: Niche[], games: GameCard[], snapshots: RevenueSnapshots, metric: NicheMetric) {
+  const week = latestDays(7);
   const raw = niches.map((niche) => {
     const nicheGames = games.filter((game) => game.nicheId === niche.id);
     const ccu = nicheGames.reduce((sum, game) => sum + game.ccu, 0);
-    const revenue = nicheGames.reduce((sum, game) => sum + gameDailyRevenue(game, snapshots), 0);
+    // Revenue over the newest 7 days Roblox has reported, so one unusual day does not decide the ranking.
+    const revenue = nicheGames.reduce((sum, game) => sum + week.reduce((total, day) => total + dayRevenue(game, day, snapshots), 0), 0);
     const wins = nicheGames.filter((game) => game.visits >= 1_000_000).length;
     const winrate = nicheGames.length > 0 ? wins / nicheGames.length : 0;
     return { ...niche, ccu, revenue, wins, winrate };
@@ -543,12 +545,13 @@ function buildNicheMetricData(niches: Niche[], games: GameCard[], snapshots: Rev
   );
 
   const scored = raw.map((niche) => {
-    const ccuShare = totalCcu > 0 ? (niche.ccu / totalCcu) * 100 : niche.value;
+    const ccuShare = totalCcu > 0 ? (niche.ccu / totalCcu) * 100 : 0;
     const revenueShare = totalRevenue > 0 ? (niche.revenue / totalRevenue) * 100 : 0;
     const winShare = totalWins > 0 ? (niche.wins / totalWins) * 100 : 0;
     const overallScore = ((totalCcu > 0 ? niche.ccu / totalCcu : 0) * 0.4 + (totalRevenue > 0 ? niche.revenue / totalRevenue : 0) * 0.4 + niche.winrate * 0.2) / maxOverall * 100;
     const value = metric === "CCU" ? ccuShare : metric === "Revenue" ? revenueShare : metric === "Winstreak" ? winShare : overallScore;
-    return { ...niche, value: Math.round(value) };
+    // One decimal, so a small niche shows 0.5% instead of disappearing into 0%.
+    return { ...niche, value: Math.round(value * 10) / 10 };
   });
 
   return scored.sort((a, b) => b.value - a.value);
