@@ -2279,8 +2279,6 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
   const [name, setName] = useState(game?.title ?? "");
   const [link, setLink] = useState(game?.link ?? "");
   const [groupName, setGroupName] = useState(game?.groupName ?? "");
-  const [arpdau, setArpdau] = useState(game?.arpdau ?? "");
-  const [creatorRewards, setCreatorRewards] = useState(game?.creatorRewards ? String(game.creatorRewards) : "");
   const [nicheId, setNicheId] = useState(game?.nicheId ?? niches[0]?.id ?? "");
   const [thumbnail, setThumbnail] = useState(game?.thumbnail ?? "");
   const [error, setError] = useState("");
@@ -2318,8 +2316,8 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim() || !link.trim() || !groupName.trim() || !thumbnail || !arpdau.trim()) {
-      setError("Game name, game link, group name, ARPDAU, and thumbnail are required.");
+    if (!name.trim() || !link.trim() || !groupName.trim() || !thumbnail) {
+      setError("Game name, game link, group name, and thumbnail are required.");
       return;
     }
 
@@ -2340,8 +2338,8 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
       linkUpdatedAt: linkChanged ? Date.now() : game?.linkUpdatedAt ?? 0,
       thumbnail,
       groupName: live.groupName ?? groupName.trim(),
-      arpdau: arpdau.trim(),
-      creatorRewards: parseRobux(creatorRewards),
+      arpdau: game?.arpdau ?? "0",
+      creatorRewards: game?.creatorRewards ?? 0,
       ccu: live.ccu,
       visits: live.visits,
       addedAt: game?.addedAt ?? dateKey(new Date()),
@@ -2364,8 +2362,6 @@ function GameDialog({ game, niches, onClose, onSubmit }: { game?: GameCard; nich
         <InputField label="Game name" value={name} onChange={setName} placeholder="Paint To Hide!" />
         <InputField label="Game link" value={link} onChange={setLink} placeholder="https://www.roblox.com/games/..." />
         <InputField label="Group name" value={groupName} onChange={setGroupName} placeholder="Your Roblox group" />
-        <InputField label="ARPDAU" value={arpdau} onChange={setArpdau} placeholder="Average Robux per visit" />
-        <InputField label="Creator Rewards (all-time Robux)" value={creatorRewards} onChange={setCreatorRewards} placeholder="Optional, e.g. 430k or 1.8M" />
         <label className="mb-4 block">
           <span className="mb-2 block text-xs font-medium text-slate-300">Niche</span>
           <select value={nicheId} onChange={(event) => setNicheId(event.target.value)} className="h-10 w-full rounded-md border border-white/10 bg-[#0d0d20] px-3 text-sm outline-none transition focus:border-purple-400">
