@@ -32,8 +32,8 @@ Prisma 6 + PostgreSQL (optional). Hosted on Railway (project `humorous-dream`, s
   counts if it shows up as a `RevenueSource`.
 
 ## Other additions
-- `middleware.ts`: Basic-auth password (`DASHBOARD_PASSWORD`) for everything except
-  `/api/discord` and `/api/cron`.
+- No login: the owner asked for the Basic-auth password (`middleware.ts`) to be removed on
+  2026-10-12. The site and its APIs (including `/api/state`) are open to anyone with the URL.
 - Daily Discord report: `lib/daily-report-timer.ts`, started from `instrumentation.ts`, checks
   every 30 min and posts once per new day Roblox reports (about 2 days behind) to
   `DISCORD_WEBHOOK_URL`. Last posted day is kept in `AppState`. `/api/cron/daily-report`
@@ -57,5 +57,4 @@ Prisma 6 + PostgreSQL (optional). Hosted on Railway (project `humorous-dream`, s
 
 ## Status
 The real-revenue / Discord / password version builds cleanly (`npm run build`, no
-TypeScript errors). In production the dashboard returns 503 until `DASHBOARD_PASSWORD`
-is set on Railway.
+TypeScript errors).

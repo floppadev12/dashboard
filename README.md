@@ -6,7 +6,6 @@ New in this version:
 
 - **Real revenue** from Roblox's official Analytics API, replacing the visits × ARPDAU estimate
   for every game with a Roblox link. Games without data keep the estimate.
-- **Password protection** for the whole dashboard.
 - **Daily Discord report** with yesterday's revenue per game.
 - **`/revenue` Discord command** (yesterday, last 7 days, last 30 days).
 
