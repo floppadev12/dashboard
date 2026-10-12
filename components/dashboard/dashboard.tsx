@@ -524,12 +524,12 @@ function RevenueChange({ value }: { value: number | null }) {
   return <span className={`ml-2 text-sm font-semibold ${value < 0 ? "text-rose-400" : "text-emerald-400"}`}>{value >= 0 ? "+" : ""}{value.toFixed(1)}%</span>;
 }
 
-function buildNicheMetricData(niches: Niche[], games: GameCard[], snapshots: RevenueSnapshots, metric: NicheMetric) {
-  const week = latestDays(7);
+function buildNicheMetricData(niches: Niche[], games: GameCard[], snapshots: RevenueSnapshots, metric: NicheMetric, range: RevenueRange = "7d") {
+  const week = latestDays(getRevenueRangeDays(range));
   const raw = niches.map((niche) => {
     const nicheGames = games.filter((game) => game.nicheId === niche.id);
     const ccu = nicheGames.reduce((sum, game) => sum + game.ccu, 0);
-    // Revenue over the newest 7 days Roblox has reported, so one unusual day does not decide the ranking.
+    // Revenue over the chosen number of days, ending on the newest day Roblox has reported.
     const revenue = nicheGames.reduce((sum, game) => sum + week.reduce((total, day) => total + dayRevenue(game, day, snapshots), 0), 0);
     const wins = nicheGames.filter((game) => game.visits >= 1_000_000).length;
     const winrate = nicheGames.length > 0 ? wins / nicheGames.length : 0;
@@ -692,6 +692,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [playerRange, setPlayerRange] = useState<PlayerRange>("3h");
   const [revenueRange, setRevenueRange] = useState<RevenueRange>("30d");
   const [nicheMetric, setNicheMetric] = useState<NicheMetric>("CCU");
+  const [nicheRange, setNicheRange] = useState<RevenueRange>("7d");
   const [revenueSnapshots, setRevenueSnapshots] = useState<RevenueSnapshots>({});
   const [ccuSnapshots, setCcuSnapshots] = useState<CcuSnapshot[]>([]);
   const [alerts, setAlerts] = useState<AlertItem[]>([]);
@@ -741,7 +742,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const totalGamesLabel = formatCompact(games.length);
   const revenueData = useMemo(() => buildRevenueData(games, revenueSnapshots, revenueRange), [games, revenueSnapshots, revenueRange, realRevenue]);
   const revenueTotal = revenueData.reduce((sum, point) => sum + point.revenue, 0);
-  const nicheMetricData = useMemo(() => buildNicheMetricData(niches, games, revenueSnapshots, nicheMetric), [niches, games, revenueSnapshots, nicheMetric, realRevenue]);
+  const nicheMetricData = useMemo(() => buildNicheMetricData(niches, games, revenueSnapshots, nicheMetric, nicheRange), [niches, games, revenueSnapshots, nicheMetric, nicheRange, realRevenue, rewardEntries]);
   const nicheDonutData = nicheMetricData.some((niche) => niche.value > 0)
     ? nicheMetricData
     : [{ id: "empty", label: "No data", value: 100, icon: "", color: "#3b3b4a" }];
@@ -1345,11 +1346,16 @@ export function Dashboard({ data }: { data: DashboardData }) {
             <Card>
               <CardHeader>
                 <CardTitle>{nicheMetric}</CardTitle>
-                <RangeSwitch
-                  ranges={["CCU", "Revenue", "Winstreak", "Overall"]}
-                  activeRange={nicheMetric}
-                  onRangeChange={(range) => setNicheMetric(range as NicheMetric)}
-                />
+                <div className="flex items-center gap-2">
+                  {nicheMetric === "Revenue" || nicheMetric === "Overall" ? (
+                    <RangeSwitch ranges={revenueRanges} activeRange={nicheRange} onRangeChange={(range) => setNicheRange(range as RevenueRange)} />
+                  ) : null}
+                  <RangeSwitch
+                    ranges={["CCU", "Revenue", "Winstreak", "Overall"]}
+                    activeRange={nicheMetric}
+                    onRangeChange={(range) => setNicheMetric(range as NicheMetric)}
+                  />
+                </div>
               </CardHeader>
               <CardContent className="grid h-full min-h-[176px] grid-cols-[1fr_120px] items-center gap-2 pt-2">
                 <ResponsiveContainer width="100%" height={175}>
