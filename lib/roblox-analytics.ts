@@ -188,10 +188,18 @@ export type CcuRange = keyof typeof CCU_RANGES;
 export const isCcuRange = (value: string): value is CcuRange => value in CCU_RANGES;
 export type CcuPoint = { t: number; players: number };
 
-const ccuCache = new Map<string, { at: number; data: CcuPoint[] }>();
+export type CcuHistory = { points: CcuPoint[]; missing: string[] };
+const ccuCache = new Map<string, { at: number; data: CcuHistory }>();
+// Roblox has no player history for some games (very new or very small ones). Remember
+// that for a while instead of asking again every minute.
+const noCcuHistory = new Map<string, number>();
+const NO_HISTORY_MS = 30 * 60_000;
 
-/** Players online over time, added up across the given games. */
-export async function concurrentPlayers(universeIds: string[], range: CcuRange): Promise<CcuPoint[]> {
+/**
+ * Players online over time, added up across the given games. `missing` lists the games
+ * Roblox has no history for; they are left out of the points.
+ */
+export async function concurrentPlayers(universeIds: string[], range: CcuRange): Promise<CcuHistory> {
   const { hours, granularity, step, cacheMs } = CCU_RANGES[range];
   const cacheKey = `${range}:${universeIds.join(",")}`;
   const hit = ccuCache.get(cacheKey);
@@ -199,9 +207,23 @@ export async function concurrentPlayers(universeIds: string[], range: CcuRange):
 
   const end = new Date();
   const start = new Date(end.getTime() - hours * 3_600_000);
+  const missing: string[] = [];
   const perGame = await Promise.all(
-    universeIds.map((id) => queryMetric(id, "PeakConcurrentPlayers", { granularity, startTime: iso(start), endTime: iso(end) })),
+    universeIds.map(async (id) => {
+      if (Date.now() - (noCcuHistory.get(id) ?? 0) < NO_HISTORY_MS) {
+        missing.push(id);
+        return [];
+      }
+      try {
+        return await queryMetric(id, "PeakConcurrentPlayers", { granularity, startTime: iso(start), endTime: iso(end) });
+      } catch (e) {
+        if (String(e).includes("not available")) noCcuHistory.set(id, Date.now());
+        missing.push(id);
+        return [];
+      }
+    }),
   );
+  if (missing.length === universeIds.length) throw new Error("Roblox has no player history for these games.");
 
   const stepMs = step * 60_000;
   const totals = new Map<number, number>();
@@ -218,7 +240,8 @@ export async function concurrentPlayers(universeIds: string[], range: CcuRange):
     game.forEach((players, bucket) => totals.set(bucket, (totals.get(bucket) ?? 0) + players));
   }
 
-  const data = [...totals].sort((a, b) => a[0] - b[0]).map(([t, players]) => ({ t, players: Math.round(players) }));
+  const points = [...totals].sort((a, b) => a[0] - b[0]).map(([t, players]) => ({ t, players: Math.round(players) }));
+  const data = { points, missing };
   ccuCache.set(cacheKey, { at: Date.now(), data });
   return data;
 }

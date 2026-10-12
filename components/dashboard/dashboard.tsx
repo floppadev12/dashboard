@@ -66,6 +66,7 @@ const ccuRecordStorageKey = "gameops-dashboard-ccu-record";
 const firedCcuRecordDatesStorageKey = "gameops-dashboard-fired-ccu-record-dates";
 const closedMonthsStorageKey = "gameops-dashboard-closed-months";
 const creatorRewardsStorageKey = creatorRewardsStateKey;
+const extraEarningsStorageKey = "gameops-dashboard-extra-earnings";
 const playerRanges = ["3h", "12h", "1d", "7d", "14d"] as const;
 const revenueRanges = ["1d", "7d", "30d", "90d", "365d"] as const;
 type PlayerRange = (typeof playerRanges)[number];
@@ -86,6 +87,8 @@ type FiredMilestones = Record<string, number[]>;
 type FiredRevenueAlerts = Record<string, boolean>;
 type FiredCcuRecordDates = Record<string, boolean>;
 type ClosedMonths = Record<string, boolean>;
+/** Money earned outside Roblox's sales data (for example selling a game), counted in all-time earnings. */
+type ExtraEarning = { id: string; label: string; usd: number; day: string };
 type RenderAlert = AlertItem | DashboardData["alerts"][number];
 type PersistedState = {
   [gamesStorageKey]?: Array<Partial<GameCard> & { onlineCount?: string }>;
@@ -99,6 +102,7 @@ type PersistedState = {
   [firedCcuRecordDatesStorageKey]?: FiredCcuRecordDates;
   [closedMonthsStorageKey]?: ClosedMonths;
   [creatorRewardsStorageKey]?: RewardEntries;
+  [extraEarningsStorageKey]?: ExtraEarning[];
 };
 const milestones = [
   { value: 1000, label: "1K", medal: "bronze", icon: "/medals/bronze.png" },
@@ -620,7 +624,7 @@ function buildRangeData(data: ChartPoint[], range: PlayerRange | RevenueRange, k
   }));
 }
 
-type CcuHistory = { range: PlayerRange; points: { t: number; players: number }[] };
+type CcuHistory = { range: PlayerRange; points: { t: number; players: number }[]; extraPlayers?: number };
 
 function buildCcuChartData(snapshots: CcuSnapshot[], currentPlayers: number, range: PlayerRange, history?: CcuHistory): ChartPoint[] {
   // Real player history from Roblox (every minute for the short ranges, hourly for the long ones).
@@ -630,7 +634,7 @@ function buildCcuChartData(snapshots: CcuSnapshot[], currentPlayers: number, ran
       const time = date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false });
       return {
         label: range === "7d" || range === "14d" ? `${date.getMonth() + 1}/${date.getDate()} ${time}` : time,
-        players: point.players,
+        players: point.players + (history.extraPlayers ?? 0),
         revenue: 0,
         sessions: 0
       };
@@ -679,6 +683,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editingGame, setEditingGame] = useState<GameCard | null>(null);
   const [openGameId, setOpenGameId] = useState<string | null>(null);
+  const [extraEarnings, setExtraEarnings] = useState<ExtraEarning[]>([]);
   const [rewardEntries, setRewardEntries] = useState<RewardEntries>({});
   rewardEntriesStore = rewardEntries;
   rewardGamesStore = games;
@@ -756,7 +761,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
       [ccuRecordStorageKey]: Number(window.localStorage.getItem(ccuRecordStorageKey) ?? "0"),
       [firedCcuRecordDatesStorageKey]: readStoredJson(firedCcuRecordDatesStorageKey, {}),
       [closedMonthsStorageKey]: readStoredJson(closedMonthsStorageKey, {}),
-      [creatorRewardsStorageKey]: readStoredJson(creatorRewardsStorageKey, {})
+      [creatorRewardsStorageKey]: readStoredJson(creatorRewardsStorageKey, {}),
+      [extraEarningsStorageKey]: readStoredJson(extraEarningsStorageKey, [])
     };
 
     async function loadState() {
@@ -789,6 +795,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
       setFiredCcuRecordDates(selectedState[firedCcuRecordDatesStorageKey] ?? {});
       setClosedMonths(selectedState[closedMonthsStorageKey] ?? {});
       setRewardEntries(sharedState[creatorRewardsStorageKey] ?? localState[creatorRewardsStorageKey] ?? {});
+      const savedExtras = sharedState[extraEarningsStorageKey] ?? localState[extraEarningsStorageKey];
+      setExtraEarnings(Array.isArray(savedExtras) ? savedExtras : []);
       setStateLoaded(true);
 
       if (!hasSharedState(sharedState) && hasSharedState(localState)) {
@@ -1026,10 +1034,13 @@ export function Dashboard({ data }: { data: DashboardData }) {
       try {
         const response = await fetch(`/api/ccu?universeIds=${universeIdsKey}&range=${playerRange}`, { cache: "no-store" });
         if (!response.ok) return;
-        const result = (await response.json()) as { points?: CcuHistory["points"]; error?: string };
+        const result = (await response.json()) as { points?: CcuHistory["points"]; missing?: string[]; error?: string };
         if (cancelled) return;
         if (result.error) console.warn("Roblox player history error:", result.error);
-        if (result.points && result.points.length > 1) setCcuHistory({ range: playerRange, points: result.points });
+        // Games Roblox has no history for are added with the players they have right now.
+        const missing = new Set(result.missing ?? []);
+        const extraPlayers = gamesRef.current.reduce((sum, game) => sum + (missing.has(String(game.universeId)) ? game.ccu : 0), 0);
+        if (result.points && result.points.length > 1) setCcuHistory({ range: playerRange, points: result.points, extraPlayers });
       } catch {
         // Keep the recorded snapshots if Roblox can't be reached.
       }
@@ -1123,6 +1134,24 @@ export function Dashboard({ data }: { data: DashboardData }) {
   function deleteNiche(nicheId?: string) {
     if (!nicheId) return;
     saveNiches(niches.filter((niche) => niche.id !== nicheId));
+  }
+
+  function saveExtraEarnings(next: ExtraEarning[]) {
+    setExtraEarnings(next);
+    writeLocalState({ [extraEarningsStorageKey]: next });
+    void writeRemoteState({ [extraEarningsStorageKey]: next });
+  }
+
+  function addExtraEarning() {
+    const amount = parseRobux(window.prompt("Amount in US dollars (for example 3200):") ?? "");
+    if (!amount) return;
+    const label = (window.prompt("What was it? (for example: Game sale)") ?? "").trim() || "Extra sale";
+    saveExtraEarnings([...extraEarnings, { id: crypto.randomUUID(), label, usd: amount, day: dateKey(new Date()) }]);
+  }
+
+  function removeExtraEarning(extra: ExtraEarning) {
+    if (!window.confirm(`Remove "${extra.label}" (${formatUsd(extra.usd)}) from all-time earnings?`)) return;
+    saveExtraEarnings(extraEarnings.filter((current) => current.id !== extra.id));
   }
 
   function saveGameRewards(gameId: string, days: Record<string, number>) {
@@ -1249,7 +1278,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
               onDeleteGame={(game) => deleteGame(game.id)}
             />
           ) : activeView === "Revenue" ? (
-            <RevenueView games={games} snapshots={revenueSnapshots} />
+            <RevenueView games={games} snapshots={revenueSnapshots} extras={extraEarnings} onAddExtra={addExtraEarning} onRemoveExtra={removeExtraEarning} />
           ) : activeView.startsWith("month-") ? (
             <MonthlyReportView
               games={games}
@@ -1449,7 +1478,7 @@ function revenueRows(games: GameCard[], snapshots: RevenueSnapshots) {
   }));
 }
 
-function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: RevenueSnapshots }) {
+function RevenueView({ games, snapshots, extras, onAddExtra, onRemoveExtra }: { games: GameCard[]; snapshots: RevenueSnapshots; extras: ExtraEarning[]; onAddExtra: () => void; onRemoveExtra: (extra: ExtraEarning) => void }) {
   const [chartRange, setChartRange] = useState<RevenueRange>("30d");
   const rows = revenueRows(games, snapshots);
   const latestDay = latestRealDay();
@@ -1463,7 +1492,8 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
   const previousMonthRows = rows.filter((row) => row.key.startsWith(previousMonth));
   const thisMonth = monthRows.reduce((sum, row) => sum + row.revenue, 0);
   const previousMonthEarnings = previousMonthRows.reduce((sum, row) => sum + row.revenue, 0);
-  const allTime = games.reduce((sum, game) => sum + gameAllTimeRevenue(game, snapshots), 0);
+  const extrasTotal = extras.reduce((sum, extra) => sum + extra.usd, 0);
+  const allTime = games.reduce((sum, game) => sum + gameAllTimeRevenue(game, snapshots), 0) + extrasTotal;
   const sources = allTimeSources(games);
   const rewards30 = rewardsOver(games, latestDays(30));
   const sales30 = games.reduce((sum, game) => sum + latestDays(30).reduce((total, day) => total + daySales(game, day), 0), 0);
@@ -1494,6 +1524,15 @@ function RevenueView({ games, snapshots }: { games: GameCard[]; snapshots: Reven
         {hasRealRevenue()
           ? `Revenue is real sales from Roblox plus Creator Rewards (Robux converted at the DevEx rate of $0.0038). Roblox reports about two days late; the newest day it has is ${latestDay}.`
           : "Waiting for real revenue from Roblox."}
+      </p>
+      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+        <span>{extras.length > 0 ? "All time earnings include extra sales:" : "Extra sales outside Roblox:"}</span>
+        {extras.map((extra) => (
+          <button key={extra.id} type="button" onClick={() => onRemoveExtra(extra)} title="Click to remove" className="rounded-md bg-white/[0.05] px-2 py-1 font-semibold text-slate-200 transition hover:bg-red-500/10 hover:text-red-300">
+            {extra.label} {formatUsd(extra.usd)} · {extra.day}
+          </button>
+        ))}
+        <button type="button" onClick={onAddExtra} className="rounded-md bg-white/[0.05] px-2 py-1 font-semibold text-slate-200 transition hover:bg-white/10">+ Add extra sale</button>
       </p>
       {sources.length > 0 ? (
         <p className="text-xs text-slate-400">

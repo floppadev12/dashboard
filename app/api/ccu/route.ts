@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
   if (ids.length === 0 || !isCcuRange(range)) return NextResponse.json({ configured: true, points: [] });
 
   try {
-    return NextResponse.json({ configured: true, range, points: await concurrentPlayers(ids, range) });
+    return NextResponse.json({ configured: true, range, ...(await concurrentPlayers(ids, range)) });
   } catch (e) {
     return NextResponse.json({ configured: true, points: [], error: e instanceof Error ? e.message : String(e) });
   }
