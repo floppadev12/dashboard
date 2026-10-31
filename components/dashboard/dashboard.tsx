@@ -1279,7 +1279,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
               onDeleteGame={(game) => deleteGame(game.id)}
             />
           ) : activeView === "Revenue" ? (
-            <RevenueView games={games} snapshots={revenueSnapshots} extras={extraEarnings} onAddExtra={addExtraEarning} onRemoveExtra={removeExtraEarning} />
+            <RevenueView games={games} niches={niches} snapshots={revenueSnapshots} extras={extraEarnings} onAddExtra={addExtraEarning} onRemoveExtra={removeExtraEarning} />
           ) : activeView.startsWith("month-") ? (
             <MonthlyReportView
               games={games}
@@ -1484,8 +1484,14 @@ function revenueRows(games: GameCard[], snapshots: RevenueSnapshots) {
   }));
 }
 
-function RevenueView({ games, snapshots, extras, onAddExtra, onRemoveExtra }: { games: GameCard[]; snapshots: RevenueSnapshots; extras: ExtraEarning[]; onAddExtra: () => void; onRemoveExtra: (extra: ExtraEarning) => void }) {
+function RevenueView({ games: allGames, niches, snapshots, extras: allExtras, onAddExtra, onRemoveExtra }: { games: GameCard[]; niches: Niche[]; snapshots: RevenueSnapshots; extras: ExtraEarning[]; onAddExtra: () => void; onRemoveExtra: (extra: ExtraEarning) => void }) {
   const [chartRange, setChartRange] = useState<RevenueRange>("30d");
+  const [category, setCategory] = useState("All");
+  // "All" shows every game; a niche shows only its games everywhere on this page.
+  const categoryNiche = niches.find((niche) => niche.label === category);
+  const games = categoryNiche ? allGames.filter((game) => game.nicheId === categoryNiche.id) : allGames;
+  // Extra sales are not tied to a game, so they only count under "All".
+  const extras = categoryNiche ? [] : allExtras;
   const rows = revenueRows(games, snapshots);
   const latestDay = latestRealDay();
   const todayKey = latestDay || dateKey(new Date());
@@ -1531,7 +1537,9 @@ function RevenueView({ games, snapshots, extras, onAddExtra, onRemoveExtra }: { 
           ? `Revenue is real sales from Roblox plus Creator Rewards (Robux converted at the DevEx rate of $0.0038). Roblox reports about two days late; the newest day it has is ${latestDay}.`
           : "Waiting for real revenue from Roblox."}
       </p>
-      <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+      {categoryNiche ? (
+        <p className="text-xs text-slate-400">Showing only {categoryNiche.label}: {games.length} game{games.length === 1 ? "" : "s"}. Extra sales are counted under All.</p>
+      ) : <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
         <span>{extras.length > 0 ? "All time earnings include extra sales:" : "Extra sales outside Roblox:"}</span>
         {extras.map((extra) => (
           <button key={extra.id} type="button" onClick={() => onRemoveExtra(extra)} title="Click to remove" className="rounded-md bg-white/[0.05] px-2 py-1 font-semibold text-slate-200 transition hover:bg-red-500/10 hover:text-red-300">
@@ -1539,7 +1547,7 @@ function RevenueView({ games, snapshots, extras, onAddExtra, onRemoveExtra }: { 
           </button>
         ))}
         <button type="button" onClick={onAddExtra} className="rounded-md bg-white/[0.05] px-2 py-1 font-semibold text-slate-200 transition hover:bg-white/10">+ Add extra sale</button>
-      </p>
+      </p>}
       {sources.length > 0 ? (
         <p className="text-xs text-slate-400">
           All time by source: {sources.map(([source, usd]) => `${source} ${formatUsd(usd)}`).join(" · ")}
@@ -1575,6 +1583,7 @@ function RevenueView({ games, snapshots, extras, onAddExtra, onRemoveExtra }: { 
           ranges={revenueRanges}
           activeRange={chartRange}
           onRangeChange={(range) => setChartRange(range as RevenueRange)}
+          controls={<RangeSwitch ranges={["All", ...niches.map((niche) => niche.label)]} activeRange={categoryNiche ? category : "All"} onRangeChange={setCategory} />}
         />
         <Card>
           <CardHeader><CardTitle>Highest Earning Games</CardTitle></CardHeader>
@@ -2659,7 +2668,8 @@ function TrendCard({
   money = false,
   ranges,
   activeRange,
-  onRangeChange
+  onRangeChange,
+  controls
 }: {
   title: string;
   value: ReactNode;
@@ -2670,12 +2680,14 @@ function TrendCard({
   ranges?: readonly string[];
   activeRange?: string;
   onRangeChange?: (range: string) => void;
+  controls?: ReactNode;
 }) {
   return (
     <Card>
       <CardHeader className="gap-3">
         <CardTitle>{title}</CardTitle>
         <div className="flex items-center gap-3">
+          {controls}
           {ranges ? <RangeSwitch ranges={ranges} activeRange={activeRange ?? ranges[0]} onRangeChange={onRangeChange ?? (() => undefined)} /> : null}
           <div className="text-lg font-semibold">{value}</div>
         </div>
@@ -2728,7 +2740,7 @@ function RangeSwitch({ ranges, activeRange, onRangeChange }: { ranges: readonly 
         <ChevronDown className={cn("h-3.5 w-3.5 text-slate-400 transition", open && "rotate-180")} />
       </button>
       {open ? (
-        <div className="absolute right-0 top-9 z-30 w-24 overflow-hidden rounded-md bg-[#111126] py-1 text-sm shadow-2xl ring-1 ring-white/10">
+        <div className="absolute right-0 top-9 z-30 w-max min-w-24 overflow-hidden rounded-md bg-[#111126] py-1 text-sm shadow-2xl ring-1 ring-white/10">
           {ranges.map((range) => (
             <button
               key={range}
