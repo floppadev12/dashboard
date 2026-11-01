@@ -6,7 +6,8 @@ Revenue and operations dashboard for the owner's Roblox games, including
 ## Stack
 Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS 3, Recharts, lucide-react,
 Prisma 6 + PostgreSQL (optional). Hosted on Railway (project `humorous-dream`, service
-`dashboard`), NOT Vercel. Auto-deploys on push to `main`. Env vars live in Railway → Variables.
+`dashboard`), NOT Vercel. A push to `main` did not deploy on 2026-11-01: run "Deploy latest
+commit" in Railway (Cmd+K) or `railway up`. Env vars live in Railway → Variables.
 
 ## How it works
 - `components/dashboard/dashboard.tsx` is the whole UI (Overview, Games, Revenue,
@@ -37,8 +38,8 @@ Prisma 6 + PostgreSQL (optional). Hosted on Railway (project `humorous-dream`, s
 - `/api/revenue/hourly` uses metric `ItemMonetizationRevenue`, granularity `OneHour`, breakdown
   `ProductType` (5 min cache). Roblox doesn't document the `ProductType` values, so
   `hourlyCategory()` matches on words; anything unmatched only counts in Total.
-- The font stack names Builder Sans but no font file is in the repo: its license limits use
-  outside Roblox and the repo is public.
+- Builder Sans is in `public/fonts`, with `@font-face` rules in `app/globals.css`. Its license
+  limits use outside Roblox; the owner reported Roblox's OK on 2026-11-01.
 
 ## Other additions
 - No login: the owner asked for the Basic-auth password (`middleware.ts`) to be removed on

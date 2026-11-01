@@ -15,6 +15,7 @@ const X_AXIS_HEIGHT = 44;
 const PILL_HEIGHT = 24;
 const PILL_STEP = 30;
 const REFRESH_MS = 5 * 60_000;
+const RETRY_MS = 60_000;
 
 type SeriesKey = Exclude<keyof HourlyRobuxPoint, "t">;
 type Shape = "circle" | "diamond" | "square" | "triangle" | "triangleDown";
@@ -75,6 +76,11 @@ const formatTick = (value: number) => (value >= 1000 ? `${Number((value / 1000).
 const formatRobux = (value: number) => Math.round(value).toLocaleString("en-US");
 const formatHour = (t: number) => new Date(t).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 const formatDate = (t: number) => `${new Date(t).getMonth() + 1}/${new Date(t).getDate()}`;
+const formatDateTime = (t: number) =>
+  new Date(t).toLocaleString("en-US", { month: "numeric", day: "numeric", year: "2-digit", hour: "numeric", minute: "2-digit" });
+
+// The last numbers, so reopening the page draws the chart right away while new ones load.
+let lastLoad: { ids: string; points: HourlyRobuxPoint[] } | null = null;
 
 /** One pill per line, next to where that line is, moved apart only as far as needed to stay readable. */
 function HoverPills({ point, x, yMax }: { point: HourlyRobuxPoint; x: number; yMax: number }) {
@@ -103,6 +109,12 @@ function HoverPills({ point, x, yMax }: { point: HourlyRobuxPoint; x: number; yM
           <span>{formatRobux(row.value)}</span>
         </div>
       ))}
+      <div
+        className="absolute -translate-x-1/2 whitespace-nowrap rounded bg-white px-2 text-[13px] leading-6 text-[#111216] shadow-lg"
+        style={{ top: MARGIN_TOP + plotHeight + 6, height: PILL_HEIGHT, left: Math.max(x, 60) }}
+      >
+        {formatDateTime(point.t)}
+      </div>
     </div>
   );
 }
@@ -119,23 +131,25 @@ function downloadCsv(points: HourlyRobuxPoint[]) {
 }
 
 export function HourlyRobuxView({ games }: { games: GameCard[] }) {
-  const [points, setPoints] = useState<HourlyRobuxPoint[] | null>(null);
-  const [notConfigured, setNotConfigured] = useState(false);
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [chartWidth, setChartWidth] = useState(1000);
-
   const universeIdsKey = games
     .map((game) => game.universeId)
     .filter((id): id is number => typeof id === "number" && id > 0)
     .sort((a, b) => a - b)
     .join(",");
 
+  const [points, setPoints] = useState<HourlyRobuxPoint[] | null>(lastLoad?.ids === universeIdsKey ? lastLoad.points : null);
+  const [notConfigured, setNotConfigured] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [chartWidth, setChartWidth] = useState(1000);
+
   useEffect(() => {
     if (!universeIdsKey) return;
     let cancelled = false;
+    let timer: number;
 
     const load = async () => {
+      let nextLoad = REFRESH_MS;
       try {
         const response = await fetch(`/api/revenue/hourly?universeIds=${universeIdsKey}`, { cache: "no-store" });
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -146,16 +160,19 @@ export function HourlyRobuxView({ games }: { games: GameCard[] }) {
         setLoadFailed(false);
         setErrors(result.errors ?? {});
         setPoints(result.points ?? []);
+        lastLoad = { ids: universeIdsKey, points: result.points ?? [] };
+        if (Object.keys(result.errors ?? {}).length) nextLoad = RETRY_MS;
       } catch {
         if (!cancelled) setLoadFailed(true);
+        nextLoad = RETRY_MS;
       }
+      if (!cancelled) timer = window.setTimeout(load, nextLoad);
     };
 
     void load();
-    const interval = window.setInterval(load, REFRESH_MS);
     return () => {
       cancelled = true;
-      window.clearInterval(interval);
+      window.clearTimeout(timer);
     };
   }, [universeIdsKey]);
 
@@ -177,7 +194,7 @@ export function HourlyRobuxView({ games }: { games: GameCard[] }) {
     : notConfigured
       ? "No Roblox API key is set, so real Robux data can't load."
       : loadFailed
-        ? "Couldn't reach Roblox. Trying again in a few minutes."
+        ? "Couldn't reach Roblox. Trying again in a minute."
         : points === null
           ? "Loading..."
           : null;
@@ -276,6 +293,7 @@ export function HourlyRobuxView({ games }: { games: GameCard[] }) {
                 name={item.label}
                 stroke={item.color}
                 strokeWidth={2}
+                className="hourly-robux-line"
                 isAnimationActive={false}
                 dot={({ cx, cy, index }: { cx?: number; cy?: number; index?: number }) => (
                   <g key={`${item.key}-${index}`}>{cx != null && cy != null ? <Marker cx={cx} cy={cy} color={item.color} shape={item.shape} /> : null}</g>

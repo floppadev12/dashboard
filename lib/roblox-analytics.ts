@@ -4,6 +4,8 @@ const API_BASE = "https://apis.roblox.com/analytics-query-api";
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 45_000;
 const CACHE_MS = 10 * 60_000;
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 2000;
 
 type Operation = {
   path?: string;
@@ -35,12 +37,19 @@ const HINTS: Record<number, string> = {
 };
 
 async function call(url: string, apiKey: string, body?: unknown): Promise<Operation> {
-  const res = await fetch(url, {
-    method: body ? "POST" : "GET",
-    headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-    cache: "no-store",
-  });
+  let res: Response;
+  for (let attempt = 0; ; attempt += 1) {
+    res = await fetch(url, {
+      method: body ? "POST" : "GET",
+      headers: { "x-api-key": apiKey, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+      cache: "no-store",
+    });
+    if (res.status !== 429 || attempt >= MAX_RETRIES) break;
+    // Too many requests: wait as long as Roblox asks, or a little longer each time.
+    const retryAfter = Number(res.headers.get("retry-after"));
+    await new Promise((r) => setTimeout(r, retryAfter > 0 ? retryAfter * 1000 : RETRY_BASE_MS * 2 ** attempt));
+  }
   if (!res.ok) {
     const detail = (await res.text()).slice(0, 160);
     throw new Error(`${HINTS[res.status] ?? `Roblox returned HTTP ${res.status}.`} ${detail}`.trim());
@@ -279,40 +288,42 @@ export async function hourlyRobuxSpent(universeIds: string[]) {
 
   const errors: Record<string, string> = {};
   const unknownTypes = new Set<string>();
-  await Promise.all(
-    universeIds.map(async (id) => {
-      let values = hourlyCache.get(id);
-      if (!values || Date.now() - values.at >= HOURLY_CACHE_MS) {
-        try {
-          values = {
-            at: Date.now(),
-            data: await queryMetric(id, "ItemMonetizationRevenue", {
-              granularity: "OneHour",
-              breakdown: ["ProductType"],
-              startTime: iso(start),
-              endTime: iso(end),
-            }),
-          };
-          hourlyCache.set(id, values);
-        } catch (e) {
+  // One game at a time: asking for them all at once makes Roblox answer 429.
+  for (const id of universeIds) {
+    let values = hourlyCache.get(id);
+    if (!values || Date.now() - values.at >= HOURLY_CACHE_MS) {
+      try {
+        values = {
+          at: Date.now(),
+          data: await queryMetric(id, "ItemMonetizationRevenue", {
+            granularity: "OneHour",
+            breakdown: ["ProductType"],
+            startTime: iso(start),
+            endTime: iso(end),
+          }),
+        };
+        hourlyCache.set(id, values);
+      } catch (e) {
+        // Keep showing this game's last answer if there is one.
+        if (!values) {
           errors[id] = e instanceof Error ? e.message : String(e);
-          return;
+          continue;
         }
       }
-      for (const series of values.data) {
-        const productType = series.breakdowns?.find((b) => b.dimension === "ProductType")?.value ?? "";
-        const category = hourlyCategory(productType);
-        if (!category) unknownTypes.add(productType || "(none)");
-        for (const dataPoint of series.dataPoints ?? []) {
-          const point = points.get(Date.parse(String(dataPoint.time ?? "")));
-          if (!point) continue;
-          const robux = Number(dataPoint.value ?? 0);
-          point.total += robux;
-          if (category) point[category] += robux;
-        }
+    }
+    for (const series of values.data) {
+      const productType = series.breakdowns?.find((b) => b.dimension === "ProductType")?.value ?? "";
+      const category = hourlyCategory(productType);
+      if (!category) unknownTypes.add(productType || "(none)");
+      for (const dataPoint of series.dataPoints ?? []) {
+        const point = points.get(Date.parse(String(dataPoint.time ?? "")));
+        if (!point) continue;
+        const robux = Number(dataPoint.value ?? 0);
+        point.total += robux;
+        if (category) point[category] += robux;
       }
-    }),
-  );
+    }
+  }
 
   return { points: [...points.values()], errors, unknownTypes: [...unknownTypes] };
 }
