@@ -218,8 +218,8 @@ export function HourlyRobuxView({ games }: { games: GameCard[] }) {
           </span>
           {current.length > 0 ? (
             <span
-              title="Robux spent in the last 72 hours × 10 (about 30 days), converted at the DevEx rate of $0.0038 per Robux"
-              className="ml-2 rounded bg-[#0f3a2c] px-2 py-0.5 text-sm font-semibold text-[#b9f5da]"
+              title="Robux spent in the last 72 hours × 10 (about 30 days), converted at the DevEx rate of $0.0038 per Robux. Green when the total is up on the 72 hours before, red when it is down."
+              className={`ml-2 rounded px-2 py-0.5 text-sm font-semibold ${sum(current, "total") < sum(previous, "total") ? "bg-[#3b1416] text-[#ff8a8a]" : "bg-[#0f3a2c] text-[#b9f5da]"}`}
             >
               {formatMonthly(sum(current, "total") * HOURS_TO_MONTH * ROBUX_TO_USD)}
             </span>
