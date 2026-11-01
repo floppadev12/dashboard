@@ -1,5 +1,7 @@
 // Real revenue from Roblox's official Open Cloud Analytics Query API (beta).
 // Docs: https://create.roblox.com/docs/cloud/guides/analytics
+import { prisma } from "@/lib/prisma";
+
 const API_BASE = "https://apis.roblox.com/analytics-query-api";
 const POLL_INTERVAL_MS = 1500;
 const POLL_TIMEOUT_MS = 45_000;
@@ -161,6 +163,7 @@ function shared<T>(key: string, work: () => Promise<T>): Promise<T> {
 }
 
 export async function revenueForGames(universeIds: string[], days: number) {
+  await restoreSavedCaches();
   const revenue: Record<string, Record<string, number>> = {};
   const errors: Record<string, string> = {};
   await Promise.all(
@@ -187,6 +190,7 @@ export async function revenueForGames(universeIds: string[], days: number) {
 }
 
 export async function allTimeForGames(universeIds: string[]) {
+  await restoreSavedCaches();
   const allTime: Record<string, AllTimeRevenue> = {};
   await Promise.all(
     universeIds.map(async (id) => {
@@ -302,7 +306,50 @@ function hourlyCategory(productType: string): HourlyRobuxCategory | null {
 
 const hourlyCache = new Map<string, { at: number; data: Series }>();
 
+// ---- A copy of the caches in the database ------------------------------------
+// After a restart (every deploy) the memory caches are empty and Roblox needs about
+// 30 seconds to answer for all games. Restoring the last copy lets the first visitor
+// see numbers right away; old entries are refreshed in the background as usual.
+export const SERVER_CACHE_KEY = "server-cache:roblox";
+type SavedCaches = {
+  revenue?: [string, { at: number; data: Record<string, number> }][];
+  allTime?: [string, { at: number; data: AllTimeRevenue }][];
+  hourly?: [string, { at: number; data: Series }][];
+};
+let restoring: Promise<void> | null = null;
+
+export function restoreSavedCaches() {
+  restoring ??= (async () => {
+    if (!process.env.DATABASE_URL) return;
+    try {
+      const row = await prisma.appState.findUnique({ where: { key: SERVER_CACHE_KEY } });
+      const saved = (row?.value ?? {}) as unknown as SavedCaches;
+      saved.revenue?.forEach(([key, entry]) => { if (!cache.has(key)) cache.set(key, entry); });
+      saved.allTime?.forEach(([key, entry]) => { if (!allTimeCache.has(key)) allTimeCache.set(key, entry); });
+      saved.hourly?.forEach(([key, entry]) => { if (!hourlyCache.has(key)) hourlyCache.set(key, entry); });
+    } catch {
+      // Start with empty caches.
+    }
+  })();
+  return restoring;
+}
+
+export async function saveCachesCopy() {
+  if (!process.env.DATABASE_URL) return;
+  const value = { revenue: [...cache], allTime: [...allTimeCache], hourly: [...hourlyCache] };
+  try {
+    await prisma.appState.upsert({
+      where: { key: SERVER_CACHE_KEY },
+      update: { value: value as never },
+      create: { key: SERVER_CACHE_KEY, value: value as never },
+    });
+  } catch {
+    // The memory caches still work.
+  }
+}
+
 export async function hourlyRobuxSpent(universeIds: string[]) {
+  await restoreSavedCaches();
   const end = new Date();
   end.setUTCMinutes(0, 0, 0);
   end.setUTCHours(end.getUTCHours() + 1);

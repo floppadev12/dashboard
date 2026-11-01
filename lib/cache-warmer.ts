@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import { allTimeForGames, concurrentPlayers, hourlyRobuxSpent, isRobloxConfigured, revenueForGames } from "@/lib/roblox-analytics";
+import { allTimeForGames, concurrentPlayers, hourlyRobuxSpent, isRobloxConfigured, restoreSavedCaches, revenueForGames, saveCachesCopy } from "@/lib/roblox-analytics";
 
 // Keeps the Roblox numbers loaded on the server, so opening the dashboard never has to
 // wait for Roblox. Uses the same requests the dashboard makes, so they share one cache.
@@ -23,6 +23,7 @@ async function savedUniverseIds() {
 
 async function warm() {
   if (!isRobloxConfigured()) return;
+  await restoreSavedCaches();
   const ids = await savedUniverseIds();
   if (ids.length === 0) return;
   // One game at a time, so Roblox does not answer "too many requests".
@@ -32,6 +33,7 @@ async function warm() {
   }
   await concurrentPlayers(ids, "3h").catch(() => undefined);
   await hourlyRobuxSpent(ids);
+  await saveCachesCopy();
 }
 
 export function startCacheWarmer() {

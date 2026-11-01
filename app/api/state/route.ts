@@ -46,7 +46,7 @@ function mergeGames(existingValue: Prisma.JsonValue | undefined, incomingValue: 
 
 export async function GET() {
   try {
-    const rows = await prisma.appState.findMany();
+    const rows = await prisma.appState.findMany({ where: { NOT: { key: { startsWith: "server-cache:" } } } });
     const state = rows.reduce<StatePayload>((acc, row) => {
       acc[row.key] = row.value;
       return acc;
