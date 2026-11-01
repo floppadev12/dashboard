@@ -25,7 +25,11 @@ async function warm() {
   if (!isRobloxConfigured()) return;
   const ids = await savedUniverseIds();
   if (ids.length === 0) return;
-  await Promise.all([revenueForGames(ids, 400), allTimeForGames(ids)]);
+  // One game at a time, so Roblox does not answer "too many requests".
+  for (const id of ids) {
+    await revenueForGames([id], 400);
+    await allTimeForGames([id]);
+  }
   await concurrentPlayers(ids, "3h").catch(() => undefined);
   await hourlyRobuxSpent(ids);
 }

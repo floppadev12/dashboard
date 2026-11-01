@@ -150,6 +150,16 @@ function refreshInBackground(key: string, work: () => Promise<unknown>) {
     .finally(() => refreshing.delete(key));
 }
 
+// The same request already on its way to Roblox is shared instead of sent twice.
+const inflight = new Map<string, Promise<unknown>>();
+function shared<T>(key: string, work: () => Promise<T>): Promise<T> {
+  const running = inflight.get(key) as Promise<T> | undefined;
+  if (running) return running;
+  const promise = work().finally(() => inflight.delete(key));
+  inflight.set(key, promise);
+  return promise;
+}
+
 export async function revenueForGames(universeIds: string[], days: number) {
   const revenue: Record<string, Record<string, number>> = {};
   const errors: Record<string, string> = {};
@@ -165,7 +175,7 @@ export async function revenueForGames(universeIds: string[], days: number) {
         return;
       }
       try {
-        const data = await dailyRevenue(id, days);
+        const data = await shared(`revenue:${cacheKey}`, () => dailyRevenue(id, days));
         cache.set(cacheKey, { at: Date.now(), data });
         revenue[id] = data;
       } catch (e) {
@@ -189,7 +199,7 @@ export async function allTimeForGames(universeIds: string[]) {
         return;
       }
       try {
-        const data = await allTimeRevenue(id);
+        const data = await shared(`allTime:${id}`, () => allTimeRevenue(id));
         allTimeCache.set(id, { at: Date.now(), data });
         allTime[id] = data;
       } catch {
