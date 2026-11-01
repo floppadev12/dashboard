@@ -31,6 +31,15 @@ Prisma 6 + PostgreSQL (optional). Hosted on Railway (project `humorous-dream`, s
   "Highest Earning Games" use it. Roblox has no separate Creator Rewards metric; it only
   counts if it shows up as a `RevenueSource`.
 
+## 72 Hours page
+- `components/dashboard/hourly-robux-view.tsx` copies the Creator Hub "Hourly Robux spent" card.
+  It shows all games added up and compares the last 72 hours to the 72 before.
+- `/api/revenue/hourly` uses metric `ItemMonetizationRevenue`, granularity `OneHour`, breakdown
+  `ProductType` (5 min cache). Roblox doesn't document the `ProductType` values, so
+  `hourlyCategory()` matches on words; anything unmatched only counts in Total.
+- The font stack names Builder Sans but no font file is in the repo: its license limits use
+  outside Roblox and the repo is public.
+
 ## Other additions
 - No login: the owner asked for the Basic-auth password (`middleware.ts`) to be removed on
   2026-10-12. The site and its APIs (including `/api/state`) are open to anyone with the URL.

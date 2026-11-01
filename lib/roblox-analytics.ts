@@ -246,6 +246,77 @@ export async function concurrentPlayers(universeIds: string[], range: CcuRange):
   return data;
 }
 
+// ---- Hourly Robux spent for the 72 Hours page --------------------------------
+// ItemMonetizationRevenue ("Robux Spent (Realtime)"), added up across the given games.
+// Two periods are returned so the page can compare the last 72 hours to the 72 before.
+const HOURLY_HOURS = 144;
+const HOURLY_CACHE_MS = 5 * 60_000;
+export type HourlyRobuxCategory = "developerProducts" | "passes" | "privateServers" | "avatarCommissions";
+export type HourlyRobuxPoint = { t: number; total: number } & Record<HourlyRobuxCategory, number>;
+
+/** Roblox doesn't document the ProductType values, so match on the words in them. */
+function hourlyCategory(productType: string): HourlyRobuxCategory | null {
+  const name = productType.toLowerCase().replace(/[^a-z]/g, "");
+  if (name.includes("developer") || name.includes("devproduct")) return "developerProducts";
+  if (name.includes("privateserver") || name.includes("vipserver")) return "privateServers";
+  if (name.includes("pass")) return "passes";
+  if (name.includes("avatar") || name.includes("commission") || name.includes("collectible")) return "avatarCommissions";
+  return null;
+}
+
+const hourlyCache = new Map<string, { at: number; data: Series }>();
+
+export async function hourlyRobuxSpent(universeIds: string[]) {
+  const end = new Date();
+  end.setUTCMinutes(0, 0, 0);
+  end.setUTCHours(end.getUTCHours() + 1);
+  const start = new Date(end.getTime() - HOURLY_HOURS * 3_600_000);
+
+  const points = new Map<number, HourlyRobuxPoint>();
+  for (let t = start.getTime(); t < end.getTime(); t += 3_600_000) {
+    points.set(t, { t, total: 0, developerProducts: 0, passes: 0, privateServers: 0, avatarCommissions: 0 });
+  }
+
+  const errors: Record<string, string> = {};
+  const unknownTypes = new Set<string>();
+  await Promise.all(
+    universeIds.map(async (id) => {
+      let values = hourlyCache.get(id);
+      if (!values || Date.now() - values.at >= HOURLY_CACHE_MS) {
+        try {
+          values = {
+            at: Date.now(),
+            data: await queryMetric(id, "ItemMonetizationRevenue", {
+              granularity: "OneHour",
+              breakdown: ["ProductType"],
+              startTime: iso(start),
+              endTime: iso(end),
+            }),
+          };
+          hourlyCache.set(id, values);
+        } catch (e) {
+          errors[id] = e instanceof Error ? e.message : String(e);
+          return;
+        }
+      }
+      for (const series of values.data) {
+        const productType = series.breakdowns?.find((b) => b.dimension === "ProductType")?.value ?? "";
+        const category = hourlyCategory(productType);
+        if (!category) unknownTypes.add(productType || "(none)");
+        for (const dataPoint of series.dataPoints ?? []) {
+          const point = points.get(Date.parse(String(dataPoint.time ?? "")));
+          if (!point) continue;
+          const robux = Number(dataPoint.value ?? 0);
+          point.total += robux;
+          if (category) point[category] += robux;
+        }
+      }
+    }),
+  );
+
+  return { points: [...points.values()], errors, unknownTypes: [...unknownTypes] };
+}
+
 // ---- Per-game stats for the game detail page ---------------------------------
 const GAME_STAT_DAYS = 30;
 const GAME_STAT_METRICS = [

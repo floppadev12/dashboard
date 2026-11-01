@@ -34,12 +34,14 @@ import type { ChartPoint, DashboardData, GameCard, Niche } from "@/lib/types";
 import { creatorRewardsStateKey, dayRewardsRobux, rewardRate as learnRewardRate, type RewardEntries } from "@/lib/creator-rewards";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { HourlyRobuxView } from "@/components/dashboard/hourly-robux-view";
 import { cn } from "@/lib/utils";
 
 const nav = [
   ["Overview", Shield],
   ["Games", Gamepad2],
-  ["Revenue", CircleDollarSign]
+  ["Revenue", CircleDollarSign],
+  ["72 Hours", Clock3]
 ] as const;
 const monthlyPages = [
   { key: "2026-05", label: "May 2026" },
@@ -1280,6 +1282,8 @@ export function Dashboard({ data }: { data: DashboardData }) {
             />
           ) : activeView === "Revenue" ? (
             <RevenueView games={games} niches={niches} snapshots={revenueSnapshots} extras={extraEarnings} onAddExtra={addExtraEarning} onRemoveExtra={removeExtraEarning} />
+          ) : activeView === "72 Hours" ? (
+            <HourlyRobuxView games={games} />
           ) : activeView.startsWith("month-") ? (
             <MonthlyReportView
               games={games}
