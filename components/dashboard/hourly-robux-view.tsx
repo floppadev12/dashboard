@@ -16,6 +16,15 @@ const PILL_HEIGHT = 24;
 const PILL_STEP = 30;
 const REFRESH_MS = 5 * 60_000;
 const RETRY_MS = 60_000;
+const ROBUX_TO_USD = 0.0038;
+// 72 hours × 10 = 30 days.
+const HOURS_TO_MONTH = 10;
+
+function formatMonthly(usd: number) {
+  if (usd >= 1_000_000) return `$${Number((usd / 1_000_000).toFixed(1))}M/Mo`;
+  if (usd >= 1_000) return `$${Number((usd / 1_000).toFixed(1))}K/Mo`;
+  return `$${Math.round(usd)}/Mo`;
+}
 
 type SeriesKey = Exclude<keyof HourlyRobuxPoint, "t">;
 type Shape = "circle" | "diamond" | "square" | "triangle" | "triangleDown";
@@ -207,6 +216,14 @@ export function HourlyRobuxView({ games }: { games: GameCard[] }) {
           <span title="Robux spent per hour over the last 72 hours, added up across all your games. Changes compare to the 72 hours before.">
             <Info className="h-4 w-4" />
           </span>
+          {current.length > 0 ? (
+            <span
+              title="Robux spent in the last 72 hours × 10 (about 30 days), converted at the DevEx rate of $0.0038 per Robux"
+              className="ml-2 rounded bg-[#0f3a2c] px-2 py-0.5 text-sm font-semibold text-[#b9f5da]"
+            >
+              {formatMonthly(sum(current, "total") * HOURS_TO_MONTH * ROBUX_TO_USD)}
+            </span>
+          ) : null}
         </h2>
         <div className="flex shrink-0 items-center gap-2">
           <a

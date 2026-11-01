@@ -169,7 +169,7 @@ function writeLocalState(state: Partial<PersistedState>) {
 }
 
 /** Shrinks an uploaded picture so games stay small enough to save. Returns the original if it can't. */
-function shrinkImage(dataUrl: string, maxSize: number): Promise<string> {
+function shrinkImage(dataUrl: string, maxSize: number, type: "image/jpeg" | "image/png" = "image/jpeg"): Promise<string> {
   return new Promise((resolve) => {
     const image = new Image();
     image.onload = () => {
@@ -181,7 +181,7 @@ function shrinkImage(dataUrl: string, maxSize: number): Promise<string> {
         const context = canvas.getContext("2d");
         if (!context) return resolve(dataUrl);
         context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const shrunk = canvas.toDataURL("image/jpeg", 0.85);
+        const shrunk = canvas.toDataURL(type, 0.85);
         resolve(shrunk.length < dataUrl.length ? shrunk : dataUrl);
       } catch {
         resolve(dataUrl);
@@ -193,6 +193,9 @@ function shrinkImage(dataUrl: string, maxSize: number): Promise<string> {
 }
 const THUMBNAIL_SIZE = 720;
 const BIG_THUMBNAIL_CHARS = 300_000;
+// Niche icons are shown at about 40px, so 128px is plenty. PNG keeps transparent corners.
+const NICHE_ICON_SIZE = 128;
+const BIG_ICON_CHARS = 40_000;
 
 async function writeRemoteState(state: Partial<PersistedState>) {
   try {
@@ -1022,6 +1025,26 @@ export function Dashboard({ data }: { data: DashboardData }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stateLoaded, games.length]);
+
+  useEffect(() => {
+    if (!stateLoaded) return;
+    const big = niches.filter((niche) => niche.iconImage?.startsWith("data:") && niche.iconImage.length > BIG_ICON_CHARS);
+    if (big.length === 0) return;
+    let cancelled = false;
+    void Promise.all(big.map(async (niche) => [niche.id, await shrinkImage(niche.iconImage as string, NICHE_ICON_SIZE, "image/png")] as const)).then((shrunk) => {
+      if (cancelled) return;
+      const byId = new Map(shrunk);
+      const next = niches.map((niche) => {
+        const iconImage = byId.get(niche.id);
+        return iconImage && niche.iconImage && iconImage.length < niche.iconImage.length ? { ...niche, iconImage } : niche;
+      });
+      if (next.some((niche, index) => niche !== niches[index])) saveNiches(next);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateLoaded, niches.length]);
 
   const universeIdsKey = games
     .map((game) => game.universeId)

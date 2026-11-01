@@ -139,6 +139,17 @@ export async function allTimeRevenue(universeId: string): Promise<AllTimeRevenue
 const cache = new Map<string, { at: number; data: Record<string, number> }>();
 const allTimeCache = new Map<string, { at: number; data: AllTimeRevenue }>();
 
+// Once something has been loaded, visitors get the saved copy straight away; if it is older
+// than the cache time, a fresh copy is fetched in the background for the next visitor.
+const refreshing = new Set<string>();
+function refreshInBackground(key: string, work: () => Promise<unknown>) {
+  if (refreshing.has(key)) return;
+  refreshing.add(key);
+  work()
+    .catch(() => undefined)
+    .finally(() => refreshing.delete(key));
+}
+
 export async function revenueForGames(universeIds: string[], days: number) {
   const revenue: Record<string, Record<string, number>> = {};
   const errors: Record<string, string> = {};
@@ -146,8 +157,11 @@ export async function revenueForGames(universeIds: string[], days: number) {
     universeIds.map(async (id) => {
       const cacheKey = `${id}:${days}`;
       const hit = cache.get(cacheKey);
-      if (hit && Date.now() - hit.at < CACHE_MS) {
+      if (hit) {
         revenue[id] = hit.data;
+        if (Date.now() - hit.at >= CACHE_MS) {
+          refreshInBackground(`revenue:${cacheKey}`, async () => cache.set(cacheKey, { at: Date.now(), data: await dailyRevenue(id, days) }));
+        }
         return;
       }
       try {
@@ -167,8 +181,11 @@ export async function allTimeForGames(universeIds: string[]) {
   await Promise.all(
     universeIds.map(async (id) => {
       const hit = allTimeCache.get(id);
-      if (hit && Date.now() - hit.at < CACHE_MS) {
+      if (hit) {
         allTime[id] = hit.data;
+        if (Date.now() - hit.at >= CACHE_MS) {
+          refreshInBackground(`allTime:${id}`, async () => allTimeCache.set(id, { at: Date.now(), data: await allTimeRevenue(id) }));
+        }
         return;
       }
       try {
@@ -288,10 +305,30 @@ export async function hourlyRobuxSpent(universeIds: string[]) {
 
   const errors: Record<string, string> = {};
   const unknownTypes = new Set<string>();
+  const loadHourly = async (id: string) => {
+    const data = await queryMetric(id, "ItemMonetizationRevenue", {
+      granularity: "OneHour",
+      breakdown: ["ProductType"],
+      startTime: iso(start),
+      endTime: iso(end),
+    });
+    hourlyCache.set(id, { at: Date.now(), data });
+  };
+  const stale = universeIds.filter((id) => {
+    const saved = hourlyCache.get(id);
+    return saved && Date.now() - saved.at >= HOURLY_CACHE_MS;
+  });
+  if (stale.length) {
+    // One game at a time: asking for them all at once makes Roblox answer 429.
+    refreshInBackground(`hourly:${stale.join(",")}`, async () => {
+      for (const id of stale) await loadHourly(id).catch(() => undefined);
+    });
+  }
+
   // One game at a time: asking for them all at once makes Roblox answer 429.
   for (const id of universeIds) {
     let values = hourlyCache.get(id);
-    if (!values || Date.now() - values.at >= HOURLY_CACHE_MS) {
+    if (!values) {
       try {
         values = {
           at: Date.now(),
@@ -348,7 +385,14 @@ const gameStatsCache = new Map<string, { at: number; data: GameStats }>();
 
 export async function gameStats(universeId: string): Promise<GameStats> {
   const hit = gameStatsCache.get(universeId);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.data;
+  if (hit) {
+    if (Date.now() - hit.at >= CACHE_MS) refreshInBackground(`stats:${universeId}`, () => loadGameStats(universeId));
+    return hit.data;
+  }
+  return loadGameStats(universeId);
+}
+
+async function loadGameStats(universeId: string): Promise<GameStats> {
 
   const data: GameStats = {};
   const load = async (metric: string, days: number) => {
