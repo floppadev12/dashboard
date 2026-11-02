@@ -20,6 +20,20 @@ const ROBUX_TO_USD = 0.0038;
 // 72 hours × 10 = 30 days.
 const HOURS_TO_MONTH = 10;
 
+// Colour of the monthly estimate, from the Total's change against the 72 hours before.
+const monthlyStages = [
+  { from: 25, className: "bg-[#0b4a30] text-[#7dffc0]", label: "rising fast" },
+  { from: 5, className: "bg-[#0f3a2c] text-[#b9f5da]", label: "rising" },
+  { from: -5, className: "bg-[#3d3410] text-[#ffe08a]", label: "about the same" },
+  { from: -25, className: "bg-[#40250f] text-[#ffb37a]", label: "falling" },
+  { from: -Infinity, className: "bg-[#3b1416] text-[#ff8a8a]", label: "falling fast" }
+];
+
+function monthlyStage(current: number, previous: number) {
+  const change = previous > 0 ? ((current - previous) / previous) * 100 : current > 0 ? 100 : 0;
+  return { change, ...(monthlyStages.find((stage) => change >= stage.from) ?? monthlyStages[2]) };
+}
+
 function formatMonthly(usd: number) {
   if (usd >= 1_000_000) return `$${Number((usd / 1_000_000).toFixed(1))}M/Mo`;
   if (usd >= 1_000) return `$${Number((usd / 1_000).toFixed(1))}K/Mo`;
@@ -216,14 +230,17 @@ export function HourlyRobuxView({ games }: { games: GameCard[] }) {
           <span title="Robux spent per hour over the last 72 hours, added up across all your games. Changes compare to the 72 hours before.">
             <Info className="h-4 w-4" />
           </span>
-          {current.length > 0 ? (
+          {current.length > 0 ? (() => {
+            const stage = monthlyStage(sum(current, "total"), sum(previous, "total"));
+            return (
             <span
-              title="Robux spent in the last 72 hours × 10 (about 30 days), converted at the DevEx rate of $0.0038 per Robux. Green when the total is up on the 72 hours before, red when it is down."
-              className={`ml-2 rounded px-2 py-0.5 text-sm font-semibold ${sum(current, "total") < sum(previous, "total") ? "bg-[#3b1416] text-[#ff8a8a]" : "bg-[#0f3a2c] text-[#b9f5da]"}`}
+              title={`Robux spent in the last 72 hours × 10 (about 30 days) at the DevEx rate of $0.0038. Total is ${stage.label} (${stage.change >= 0 ? "+" : ""}${stage.change.toFixed(1)}% vs the 72 hours before). Colours: bright green above +25%, green +5% to +25%, yellow -5% to +5%, orange -5% to -25%, red below -25%.`}
+              className={`ml-2 rounded px-2 py-0.5 text-sm font-semibold ${stage.className}`}
             >
               {formatMonthly(sum(current, "total") * HOURS_TO_MONTH * ROBUX_TO_USD)}
             </span>
-          ) : null}
+            );
+          })() : null}
         </h2>
         <div className="flex shrink-0 items-center gap-2">
           <a

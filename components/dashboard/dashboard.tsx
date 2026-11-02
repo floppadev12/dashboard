@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Gamepad2,
   LayoutGrid,
+  Menu,
   Megaphone,
   MoreVertical,
   Plus,
@@ -688,6 +689,7 @@ export function Dashboard({ data }: { data: DashboardData }) {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [editingGame, setEditingGame] = useState<GameCard | null>(null);
   const [openGameId, setOpenGameId] = useState<string | null>(null);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [extraEarnings, setExtraEarnings] = useState<ExtraEarning[]>([]);
   const [rewardEntries, setRewardEntries] = useState<RewardEntries>({});
   rewardEntriesStore = rewardEntries;
@@ -1205,6 +1207,37 @@ export function Dashboard({ data }: { data: DashboardData }) {
     void writeRemoteState({ [closedMonthsStorageKey]: nextClosedMonths, [alertsStorageKey]: nextAlerts });
   }
 
+  const navMenu = (
+    <nav className="space-y-2">
+      {nav.map(([label, Icon], index) => (
+        <button
+          key={label}
+          onClick={() => { setActiveView(label); setOpenGameId(null); setMobileNavOpen(false); }}
+          className={cn(
+            "flex h-10 w-full items-center gap-3 rounded-md px-3 text-xs font-medium text-slate-400 transition hover:bg-white/5 hover:text-white",
+            activeView === label && "bg-[#24105c] text-white shadow-glow ring-1 ring-purple-500/40"
+          )}
+        >
+          <Icon className="h-4 w-4" />
+          {label}
+        </button>
+      ))}
+      <div className="my-3 border-t border-white/10" />
+      {monthlyPages.map((month) => (
+        <button
+          key={month.key}
+          onClick={() => { setActiveView(`month-${month.key}`); setMobileNavOpen(false); }}
+          className={cn(
+            "flex h-9 w-full items-center rounded-md px-3 text-left text-xs font-medium text-slate-500 transition hover:bg-white/5 hover:text-white",
+            activeView === `month-${month.key}` && "bg-[#24105c] text-white shadow-glow ring-1 ring-purple-500/40"
+          )}
+        >
+          {month.label}
+        </button>
+      ))}
+    </nav>
+  );
+
   return (
     <main className="dashboard-shell min-h-screen text-white">
       <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[150px_1fr]">
@@ -1212,38 +1245,28 @@ export function Dashboard({ data }: { data: DashboardData }) {
           <div className="mb-8 flex flex-col items-center gap-2">
             <img src="/brand/project-raw.png" alt="Project Raw" className="h-20 w-20 rounded-md object-cover shadow-glow" />
           </div>
-          <nav className="space-y-2">
-            {nav.map(([label, Icon], index) => (
-              <button
-                key={label}
-                onClick={() => { setActiveView(label); setOpenGameId(null); }}
-                className={cn(
-                  "flex h-10 w-full items-center gap-3 rounded-md px-3 text-xs font-medium text-slate-400 transition hover:bg-white/5 hover:text-white",
-                  activeView === label && "bg-[#24105c] text-white shadow-glow ring-1 ring-purple-500/40"
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {label}
-              </button>
-            ))}
-            <div className="my-3 border-t border-white/10" />
-            {monthlyPages.map((month) => (
-              <button
-                key={month.key}
-                onClick={() => setActiveView(`month-${month.key}`)}
-                className={cn(
-                  "flex h-9 w-full items-center rounded-md px-3 text-left text-xs font-medium text-slate-500 transition hover:bg-white/5 hover:text-white",
-                  activeView === `month-${month.key}` && "bg-[#24105c] text-white shadow-glow ring-1 ring-purple-500/40"
-                )}
-              >
-                {month.label}
-              </button>
-            ))}
-          </nav>
+          {navMenu}
         </aside>
 
         <section className="min-w-0 px-4 py-5 sm:px-6 lg:px-5">
+          {mobileNavOpen ? (
+            <div className="fixed inset-0 z-50 lg:hidden">
+              <button type="button" aria-label="Close menu" className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => setMobileNavOpen(false)} />
+              <aside className="absolute inset-y-0 left-0 flex w-60 flex-col overflow-y-auto border-r border-white/8 bg-[#0b0a1d] px-3 py-5 shadow-2xl">
+                <div className="mb-6 flex items-center justify-between">
+                  <img src="/brand/project-raw.png" alt="Project Raw" className="h-12 w-12 rounded-md object-cover shadow-glow" />
+                  <button type="button" aria-label="Close menu" onClick={() => setMobileNavOpen(false)} className="grid h-9 w-9 place-items-center rounded-md text-slate-400 hover:bg-white/5 hover:text-white">
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                {navMenu}
+              </aside>
+            </div>
+          ) : null}
           <header className="mb-4 flex items-center justify-end gap-4">
+            <button type="button" aria-label="Open menu" onClick={() => setMobileNavOpen(true)} className="mr-auto grid h-10 w-10 place-items-center rounded-md text-slate-300 transition hover:bg-white/5 hover:text-white lg:hidden">
+              <Menu className="h-5 w-5" />
+            </button>
             <div ref={searchRef} className="relative">
               <Button variant="ghost" size="icon" aria-label="Search" onClick={() => setSearchOpen((open) => !open)}>
                 <Search className="h-5 w-5" />
