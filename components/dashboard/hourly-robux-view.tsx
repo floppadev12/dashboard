@@ -21,17 +21,21 @@ const ROBUX_TO_USD = 0.0038;
 const HOURS_TO_MONTH = 10;
 
 // Colour of the monthly estimate, from the Total's change against the 72 hours before.
-const monthlyStages = [
-  { from: 25, className: "bg-[#16a34a] text-white", label: "rising fast" },
+// Green when up more than 5%, yellow within 5% either way, red when down more than 5%.
+// Used for the monthly estimate and every % badge.
+const stages = [
   { from: 5, className: "bg-[#0f3a2c] text-[#b9f5da]", label: "rising" },
   { from: -5, className: "bg-[#3d3410] text-[#ffe08a]", label: "about the same" },
-  { from: -25, className: "bg-[#40250f] text-[#ffb37a]", label: "falling" },
-  { from: -Infinity, className: "bg-[#3b1416] text-[#ff8a8a]", label: "falling fast" }
+  { from: -Infinity, className: "bg-[#3b1416] text-[#ff8a8a]", label: "falling" }
 ];
+
+function stageFor(change: number) {
+  return stages.find((stage) => change >= stage.from) ?? stages[1];
+}
 
 function monthlyStage(current: number, previous: number) {
   const change = previous > 0 ? ((current - previous) / previous) * 100 : current > 0 ? 100 : 0;
-  return { change, ...(monthlyStages.find((stage) => change >= stage.from) ?? monthlyStages[2]) };
+  return { change, ...stageFor(change) };
 }
 
 function formatMonthly(usd: number) {
@@ -78,7 +82,7 @@ function ChangeBadge({ current, previous }: { current: number; previous: number 
   const text = Math.abs(percent) > 1000 ? ">1,000.0%" : `${Math.abs(percent).toFixed(1)}%`;
   const Arrow = down ? ArrowDown : ArrowUp;
   return (
-    <span className={`inline-flex h-6 items-center gap-1 rounded px-2 text-xs ${down ? "bg-[#3b1416] text-[#ff8a8a]" : "bg-[#0f3a2c] text-[#b9f5da]"}`}>
+    <span className={`inline-flex h-6 items-center gap-1 rounded px-2 text-xs ${stageFor(percent).className}`}>
       {percent !== 0 ? <Arrow className="h-3 w-3" /> : null}
       {text}
     </span>
@@ -234,7 +238,7 @@ export function HourlyRobuxView({ games }: { games: GameCard[] }) {
             const stage = monthlyStage(sum(current, "total"), sum(previous, "total"));
             return (
             <span
-              title={`Robux spent in the last 72 hours × 10 (about 30 days) at the DevEx rate of $0.0038. Total is ${stage.label} (${stage.change >= 0 ? "+" : ""}${stage.change.toFixed(1)}% vs the 72 hours before). Colours: green above +25%, light green +5% to +25%, yellow -5% to +5%, orange -5% to -25%, red below -25%.`}
+              title={`Robux spent in the last 72 hours × 10 (about 30 days) at the DevEx rate of $0.0038. Total is ${stage.label} (${stage.change >= 0 ? "+" : ""}${stage.change.toFixed(1)}% vs the 72 hours before). Colours: green above +5%, yellow from -5% to +5%, red below -5%.`}
               className={`ml-2 rounded px-2 py-0.5 text-sm font-semibold ${stage.className}`}
             >
               {formatMonthly(sum(current, "total") * HOURS_TO_MONTH * ROBUX_TO_USD)}
