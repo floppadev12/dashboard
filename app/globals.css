@@ -74,6 +74,14 @@ select {
   }
 }
 
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 .purple-line {
   filter: drop-shadow(0 0 12px rgba(139, 66, 255, 0.75));
 }

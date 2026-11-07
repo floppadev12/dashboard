@@ -1345,10 +1345,13 @@ export function Dashboard({ data }: { data: DashboardData }) {
           <div className="grid gap-3 xl:grid-cols-[1.05fr_.95fr]">
             <Card>
               <CardHeader><CardTitle>Games Overview</CardTitle></CardHeader>
-              <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {visibleGames.slice(0, 6).map((game) => (
-                  <GameOverviewCard key={game.id} game={game} rank={sortedGames.findIndex((rankedGame) => rankedGame.id === game.id) + 1} onEdit={() => undefined} onDelete={() => undefined} readonly />
-                ))}
+              {/* Two rows show; the rest scroll with the mouse wheel. The padding keeps the hover lift and ring from being cut off. */}
+              <CardContent>
+                <div className="no-scrollbar -m-1 grid max-h-[328px] grid-cols-1 gap-3 overflow-y-auto p-1 sm:grid-cols-2 xl:grid-cols-3">
+                  {visibleGames.map((game) => (
+                    <GameOverviewCard key={game.id} game={game} rank={sortedGames.findIndex((rankedGame) => rankedGame.id === game.id) + 1} onEdit={() => undefined} onDelete={() => undefined} readonly />
+                  ))}
+                </div>
               </CardContent>
             </Card>
 
